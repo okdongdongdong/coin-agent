@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coin Agent Dashboard</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #242836;
+  --border: #2e3347;
+  --text: #e1e4eb;
+  --text2: #8b8fa3;
+  --accent: #6c5ce7;
+  --green: #00d68f;
+  --red: #ff6b6b;
+  --yellow: #ffd93d;
+  --blue: #4ecdc4;
+  --orange: #f39c12;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+a { color: var(--accent); text-decoration: none; }
+
+/* Header */
+.header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.header-left { display: flex; align-items: center; gap: 16px; }
+.logo { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+.logo span { color: var(--accent); }
+.status-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.status-running { background: rgba(0,214,143,0.15); color: var(--green); }
+.status-idle { background: rgba(139,143,163,0.15); color: var(--text2); }
+.status-stopped { background: rgba(255,107,107,0.15); color: var(--red); }
+.header-right { display: flex; align-items: center; gap: 16px; font-size: 13px; color: var(--text2); }
+.refresh-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.refresh-btn:hover { background: var(--border); }
+
+/* Layout */
+.container { max-width: 1400px; margin: 0 auto; padding: 20px 24px; }
+
+/* Nav tabs */
+.nav-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 4px;
+  margin-bottom: 20px;
+  overflow-x: auto;
+}
+.nav-tab {
+  padding: 8px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text2);
+  white-space: nowrap;
+  transition: all 0.2s;
+  border: none;
+  background: none;
+}
+.nav-tab:hover { color: var(--text); background: var(--surface2); }
+.nav-tab.active { color: #fff; background: var(--accent); }
+
+/* Cards */
+.grid { display: grid; gap: 16px; }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+.grid-1-2 { grid-template-columns: 1fr 2fr; }
+.grid-2-1 { grid-template-columns: 2fr 1fr; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text2);
+  margin-bottom: 12px;
+}
+.card-value {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+.card-sub { font-size: 13px; color: var(--text2); margin-top: 4px; }
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+.neutral { color: var(--text2); }
+
+/* Stat card */
+.stat-row { display: flex; justify-content: space-between; align-items: center; }
+
+/* Table */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text2);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(46,51,71,0.5);
+}
+tr:hover td { background: rgba(108,92,231,0.05); }
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 12px;
+}
+.rank-1 { background: linear-gradient(135deg, #ffd700, #f0c000); color: #000; }
+.rank-2 { background: linear-gradient(135deg, #c0c0c0, #a0a0a0); color: #000; }
+.rank-3 { background: linear-gradient(135deg, #cd7f32, #b06820); color: #fff; }
+.rank-other { background: var(--surface2); color: var(--text2); }
+
+/* Progress bar */
+.progress-bar {
+  height: 6px;
+  background: var(--surface2);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s;
+}
+
+/* Score bar */
+.score-bar-wrap { display: flex; align-items: center; gap: 8px; }
+.score-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--surface2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.score-fill { height: 100%; border-radius: 4px; }
+
+/* Signal badge */
+.signal-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.signal-buy { background: rgba(0,214,143,0.15); color: var(--green); }
+.signal-sell { background: rgba(255,107,107,0.15); color: var(--red); }
+.signal-hold { background: rgba(139,143,163,0.15); color: var(--text2); }
+
+/* Donut chart */
+.donut-container { display: flex; align-items: center; justify-content: center; gap: 24px; }
+.donut-svg { width: 160px; height: 160px; }
+.donut-legend { display: flex; flex-direction: column; gap: 8px; }
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+/* Risk gauge */
+.gauge-container { text-align: center; }
+.gauge-svg { width: 140px; height: 80px; }
+.gauge-label { font-size: 13px; color: var(--text2); margin-top: 4px; }
+.gauge-value { font-size: 20px; font-weight: 700; }
+
+/* Report block */
+.report-pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  max-height: 600px;
+  overflow-y: auto;
+  color: var(--text2);
+}
+
+/* Kill switch indicator */
+.kill-banner {
+  background: rgba(255,107,107,0.15);
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 12px 20px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  color: var(--red);
+}
+
+/* Tab content */
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Animations */
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.5} }
+.loading { animation: pulse 1.5s infinite; color: var(--text2); }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .grid-3 { grid-template-columns: 1fr; }
+  .grid-2 { grid-template-columns: 1fr; }
+  .grid-1-2, .grid-2-1 { grid-template-columns: 1fr; }
+  .header { flex-wrap: wrap; gap: 8px; }
+}
+@media (max-width: 600px) {
+  .grid-4 { grid-template-columns: 1fr; }
+  .container { padding: 12px; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="logo">Coin<span>Agent</span></div>
+    <span id="statusBadge" class="status-badge status-idle">IDLE</span>
+    <span id="modeBadge" class="status-badge" style="background:rgba(108,92,231,0.15);color:var(--accent)">PAPER</span>
+  </div>
+  <div class="header-right">
+    <span id="tickInfo">Tick: -</span>
+    <span id="lastUpdate">-</span>
+    <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
+  </div>
+</div>
+
+<div class="container">
+  <div id="killBanner" class="kill-banner" style="display:none">
+    KILL SWITCH ACTIVE - All trading halted
+  </div>
+
+  <div class="nav-tabs">
+    <button class="nav-tab active" data-tab="overview">Overview</button>
+    <button class="nav-tab" data-tab="agents">Agents</button>
+    <button class="nav-tab" data-tab="signals">Signals</button>
+    <button class="nav-tab" data-tab="trades">Trades</button>
+    <button class="nav-tab" data-tab="risk">Risk</button>
+    <button class="nav-tab" data-tab="report">Report</button>
+    <button class="nav-tab" data-tab="config">Config</button>
+  </div>
+
+  <!-- OVERVIEW TAB -->
+  <div id="tab-overview" class="tab-content active">
+    <div class="grid grid-4" style="margin-bottom:16px">
+      <div class="card">
+        <div class="card-title">Total Value</div>
+        <div class="card-value" id="totalValue">-</div>
+        <div class="card-sub" id="totalValueSub">Initial: -</div>
+      </div>
+      <div class="card">
+        <div class="card-title">P&L</div>
+        <div class="card-value" id="pnlValue">-</div>
+        <div class="card-sub" id="pnlPct">-</div>
+      </div>
+      <div class="card">
+        <div class="card-title">KRW Available</div>
+        <div class="card-value" id="krwValue">-</div>
+        <div class="card-sub" id="krwSub">Cash balance</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Position</div>
+        <div class="card-value" id="posValue">-</div>
+        <div class="card-sub" id="posSub">-</div>
+      </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-bottom:16px">
+      <div class="card">
+        <div class="card-title">Capital Allocation</div>
+        <div class="donut-container">
+          <svg class="donut-svg" id="donutChart" viewBox="0 0 160 160"></svg>
+          <div class="donut-legend" id="donutLegend"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Agent Leaderboard (Top)</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Agent</th><th>Score</th><th>P&L</th></tr></thead>
+            <tbody id="miniLeaderboard"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-title">Latest Signals</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Agent</th><th>Action</th><th>Confidence</th><th>Reason</th></tr></thead>
+            <tbody id="latestSignals"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Recent Trades</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Side</th><th>Volume</th><th>Price</th><th>Status</th></tr></thead>
+            <tbody id="recentTrades"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AGENTS TAB -->
+  <div id="tab-agents" class="tab-content">
+    <div class="card">
+      <div class="card-title">Agent Performance Leaderboard</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Agent</th>
+              <th>Score</th>
+              <th>Trades</th>
+              <th>Win Rate</th>
+              <th>P&L</th>
+              <th>Max DD</th>
+              <th>Phase</th>
+              <th>Allocation</th>
+            </tr>
+          </thead>
+          <tbody id="fullLeaderboard"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:16px">
+      <div class="card">
+        <div class="card-title">Score Breakdown</div>
+        <div id="scoreBreakdown"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Agent Wallets</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Agent</th><th>KRW</th><th>Asset</th><th>Avg Price</th></tr></thead>
+            <tbody id="agentWallets"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SIGNALS TAB -->
+  <div id="tab-signals" class="tab-content">
+    <div class="card">
+      <div class="card-title">Signal History</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Agent</th><th>Action</th><th>Confidence</th><th>Reason</th></tr>
+          </thead>
+          <tbody id="signalHistory"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRADES TAB -->
+  <div id="tab-trades" class="tab-content">
+    <div class="card">
+      <div class="card-title">Order History</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Agent</th><th>Side</th><th>Volume</th><th>Price</th><th>Status</th><th>Reason</th></tr>
+          </thead>
+          <tbody id="orderHistory"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- RISK TAB -->
+  <div id="tab-risk" class="tab-content">
+    <div class="grid grid-3" style="margin-bottom:16px">
+      <div class="card gauge-container">
+        <div class="card-title">Daily Loss Limit</div>
+        <svg class="gauge-svg" id="gaugeDailyLoss" viewBox="0 0 140 80"></svg>
+        <div class="gauge-value" id="dailyLossVal">-</div>
+        <div class="gauge-label" id="dailyLossLabel">/ - KRW</div>
+      </div>
+      <div class="card gauge-container">
+        <div class="card-title">Total Loss Limit</div>
+        <svg class="gauge-svg" id="gaugeTotalLoss" viewBox="0 0 140 80"></svg>
+        <div class="gauge-value" id="totalLossVal">-</div>
+        <div class="gauge-label" id="totalLossLabel">/ - KRW</div>
+      </div>
+      <div class="card gauge-container">
+        <div class="card-title">Position Exposure</div>
+        <svg class="gauge-svg" id="gaugeExposure" viewBox="0 0 140 80"></svg>
+        <div class="gauge-value" id="exposureVal">-</div>
+        <div class="gauge-label" id="exposureLabel">/ - %</div>
+      </div>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-title">Circuit Breaker Status</div>
+        <div id="cbStatus" style="font-size:14px;line-height:1.8"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Risk Limits</div>
+        <div id="riskLimits" style="font-size:14px;line-height:1.8"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- REPORT TAB -->
+  <div id="tab-report" class="tab-content">
+    <div class="card">
+      <div class="card-title">Latest Tick Report</div>
+      <pre class="report-pre" id="reportText">No report available. Run 'tick' first.</pre>
+    </div>
+  </div>
+
+  <!-- CONFIG TAB -->
+  <div id="tab-config" class="tab-content">
+    <div class="card">
+      <div class="card-title">Bot Configuration</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
+          <tbody id="configTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const COLORS = ['#6c5ce7','#00d68f','#4ecdc4','#f39c12','#ff6b6b','#a29bfe','#fd79a8','#74b9ff'];
+const AGENT_COLORS = {};
+let colorIdx = 0;
+function agentColor(aid) {
+  if (!AGENT_COLORS[aid]) AGENT_COLORS[aid] = COLORS[colorIdx++ % COLORS.length];
+  return AGENT_COLORS[aid];
+}
+
+// Tab switching
+document.querySelectorAll('.nav-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+function fmt(n) {
+  if (n === undefined || n === null || isNaN(n)) return '-';
+  return Number(n).toLocaleString('ko-KR', {maximumFractionDigits: 0});
+}
+function fmtDec(n, d) {
+  if (n === undefined || n === null || isNaN(n)) return '-';
+  return Number(n).toLocaleString('ko-KR', {minimumFractionDigits: d, maximumFractionDigits: d});
+}
+function fmtTime(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString('ko-KR', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+function pnlClass(v) { return v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral'; }
+function signalClass(a) {
+  if (!a) return 'signal-hold';
+  const al = a.toLowerCase();
+  if (al === 'buy' || al === 'bid') return 'signal-buy';
+  if (al === 'sell' || al === 'ask') return 'signal-sell';
+  return 'signal-hold';
+}
+
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(url);
+    return await r.json();
+  } catch(e) { console.error('Fetch error:', url, e); return null; }
+}
+
+// === RENDER FUNCTIONS ===
+
+function renderOverview(data) {
+  if (!data) return;
+
+  // Status badge
+  const sb = document.getElementById('statusBadge');
+  sb.textContent = data.bot_status.toUpperCase();
+  sb.className = 'status-badge status-' + data.bot_status;
+
+  const mb = document.getElementById('modeBadge');
+  mb.textContent = data.mode;
+
+  document.getElementById('tickInfo').textContent = 'Tick: ' + (data.tick_count || 0);
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('ko-KR');
+
+  // Kill banner
+  document.getElementById('killBanner').style.display = data.kill_switch ? 'flex' : 'none';
+
+  // Cards
+  const tv = data.total_value || data.initial_capital;
+  document.getElementById('totalValue').textContent = fmt(tv) + ' KRW';
+  document.getElementById('totalValueSub').textContent = 'Initial: ' + fmt(data.initial_capital) + ' KRW';
+
+  const pnl = data.pnl || 0;
+  const pnlEl = document.getElementById('pnlValue');
+  pnlEl.textContent = (pnl >= 0 ? '+' : '') + fmt(pnl) + ' KRW';
+  pnlEl.className = 'card-value ' + pnlClass(pnl);
+  const pp = document.getElementById('pnlPct');
+  pp.textContent = (data.pnl_pct >= 0 ? '+' : '') + fmtDec(data.pnl_pct, 2) + '%';
+  pp.className = 'card-sub ' + pnlClass(pnl);
+
+  document.getElementById('krwValue').textContent = fmt(data.krw_available) + ' KRW';
+  document.getElementById('posValue').textContent = fmt(data.position_value) + ' KRW';
+  document.getElementById('posSub').textContent = (data.total_asset || 0) + ' ' + (data.markets && data.markets[0] ? data.markets[0].split('-')[1] : 'BTC');
+}
+
+function renderDonut(leaderboard) {
+  const svg = document.getElementById('donutChart');
+  const legend = document.getElementById('donutLegend');
+  svg.innerHTML = '';
+  legend.innerHTML = '';
+  if (!leaderboard || !leaderboard.length) return;
+
+  const total = leaderboard.reduce((s, a) => s + (a.allocation_pct || 0), 0) || 100;
+  const cx = 80, cy = 80, r = 60, r2 = 40;
+  let startAngle = -90;
+
+  leaderboard.forEach((agent, i) => {
+    const pct = (agent.allocation_pct || 0) / total;
+    if (pct <= 0) return;
+    const angle = pct * 360;
+    const endAngle = startAngle + angle;
+    const large = angle > 180 ? 1 : 0;
+
+    const s1 = Math.PI / 180 * startAngle;
+    const s2 = Math.PI / 180 * endAngle;
+    const x1 = cx + r * Math.cos(s1), y1 = cy + r * Math.sin(s1);
+    const x2 = cx + r * Math.cos(s2), y2 = cy + r * Math.sin(s2);
+    const x3 = cx + r2 * Math.cos(s2), y3 = cy + r2 * Math.sin(s2);
+    const x4 = cx + r2 * Math.cos(s1), y4 = cy + r2 * Math.sin(s1);
+
+    const d = `M${x1},${y1} A${r},${r} 0 ${large} 1 ${x2},${y2} L${x3},${y3} A${r2},${r2} 0 ${large} 0 ${x4},${y4} Z`;
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', agentColor(agent.agent_id));
+    path.setAttribute('stroke', 'var(--bg)');
+    path.setAttribute('stroke-width', '2');
+    svg.appendChild(path);
+
+    startAngle = endAngle;
+
+    const name = agent.agent_id.replace('_agent','').replace('_',' ');
+    legend.innerHTML += `<div class="legend-item">
+      <span class="legend-dot" style="background:${agentColor(agent.agent_id)}"></span>
+      <span>${name} (${fmtDec(agent.allocation_pct,1)}%)</span>
+    </div>`;
+  });
+}
+
+function renderMiniLeaderboard(data) {
+  const tb = document.getElementById('miniLeaderboard');
+  if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="4" class="neutral">No data</td></tr>'; return; }
+  tb.innerHTML = data.slice(0, 4).map((a, i) => {
+    const rc = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : 'rank-other';
+    const name = a.agent_id.replace('_agent','').replace('_',' ');
+    const pnl = a.pnl || 0;
+    return `<tr>
+      <td><span class="rank-badge ${rc}">${i+1}</span></td>
+      <td>${name}</td>
+      <td>${fmtDec(a.composite || 50, 1)}</td>
+      <td class="${pnlClass(pnl)}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderLatestSignals(data) {
+  const tb = document.getElementById('latestSignals');
+  if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="4" class="neutral">No signals yet</td></tr>'; return; }
+  // Group by most recent tick — take last batch of same timestamp
+  const latest = data.slice(-4);
+  tb.innerHTML = latest.map(s => {
+    const name = (s.agent_id || '').replace('_agent','').replace('_',' ');
+    const action = s.action || 'hold';
+    return `<tr>
+      <td>${name}</td>
+      <td><span class="signal-badge ${signalClass(action)}">${action}</span></td>
+      <td>${fmtDec(s.confidence || 0, 2)}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.reason || '-'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderRecentTrades(data) {
+  const tb = document.getElementById('recentTrades');
+  if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="5" class="neutral">No trades yet</td></tr>'; return; }
+  tb.innerHTML = data.slice(-5).reverse().map(t => {
+    const side = t.side || '?';
+    return `<tr>
+      <td>${fmtTime(t._ts || t.timestamp)}</td>
+      <td><span class="signal-badge ${signalClass(side)}">${side}</span></td>
+      <td>${t.volume || '-'}</td>
+      <td>${fmt(t.price)}</td>
+      <td>${t.success ? '<span class="positive">OK</span>' : '<span class="negative">FAIL</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderFullLeaderboard(data, wallets) {
+  const tb = document.getElementById('fullLeaderboard');
+  if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="9" class="neutral">No agents</td></tr>'; return; }
+  tb.innerHTML = data.map((a, i) => {
+    const rc = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : 'rank-other';
+    const name = a.agent_id.replace('_agent','').replace('_',' ');
+    const pnl = a.pnl || 0;
+    const wr = a.win_rate !== undefined ? fmtDec(a.win_rate * 100, 0) + '%' : '0%';
+    const mdd = a.max_drawdown !== undefined ? fmtDec(a.max_drawdown, 1) + '%' : '0%';
+    const score = a.composite || 50;
+    const scoreColor = score >= 70 ? 'var(--green)' : score >= 40 ? 'var(--yellow)' : 'var(--red)';
+    return `<tr>
+      <td><span class="rank-badge ${rc}">${i+1}</span></td>
+      <td style="font-weight:600;color:${agentColor(a.agent_id)}">${name}</td>
+      <td>
+        <div class="score-bar-wrap">
+          <span style="min-width:32px">${fmtDec(score,1)}</span>
+          <div class="score-bar"><div class="score-fill" style="width:${score}%;background:${scoreColor}"></div></div>
+        </div>
+      </td>
+      <td>${a.total_trades || 0}</td>
+      <td>${wr}</td>
+      <td class="${pnlClass(pnl)}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>
+      <td>${mdd}</td>
+      <td><span class="signal-badge signal-hold">${a.phase || 'warmup'}</span></td>
+      <td>${fmtDec(a.allocation_pct || 25, 1)}%</td>
+    </tr>`;
+  }).join('');
+
+  // Wallets
+  const wt = document.getElementById('agentWallets');
+  if (wallets && Object.keys(wallets).length) {
+    wt.innerHTML = Object.entries(wallets).map(([k,v]) => {
+      const name = k.replace('_agent','').replace('_',' ');
+      return `<tr>
+        <td style="color:${agentColor(k)}">${name}</td>
+        <td>${fmt(v.krw_available)}</td>
+        <td>${v.asset_available || 0}</td>
+        <td>${fmt(v.avg_buy_price)}</td>
+      </tr>`;
+    }).join('');
+  } else {
+    wt.innerHTML = '<tr><td colspan="4" class="neutral">No wallet data</td></tr>';
+  }
+}
+
+function renderScoreBreakdown(data) {
+  const el = document.getElementById('scoreBreakdown');
+  if (!data || !data.length) { el.innerHTML = '<div class="neutral">No score data</div>'; return; }
+  const dims = ['sharpe_score','win_rate_score','profit_factor_score','drawdown_score','consistency_score'];
+  const labels = ['Sharpe (30%)','Win Rate (20%)','Profit Factor (20%)','Drawdown (20%)','Consistency (10%)'];
+  el.innerHTML = data.map(a => {
+    const name = a.agent_id.replace('_agent','').replace('_',' ');
+    const bars = dims.map((d,i) => {
+      const val = a[d] || 50;
+      return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0">
+        <span style="width:120px;font-size:11px;color:var(--text2)">${labels[i]}</span>
+        <div class="score-bar" style="flex:1"><div class="score-fill" style="width:${val}%;background:${agentColor(a.agent_id)}"></div></div>
+        <span style="width:30px;font-size:11px;text-align:right">${fmtDec(val,0)}</span>
+      </div>`;
+    }).join('');
+    return `<div style="margin-bottom:16px">
+      <div style="font-weight:600;margin-bottom:6px;color:${agentColor(a.agent_id)}">${name} <span style="color:var(--text2);font-weight:400">(${fmtDec(a.composite||50,1)})</span></div>
+      ${bars}
+    </div>`;
+  }).join('');
+}
+
+function renderSignalHistory(data) {
+  const tb = document.getElementById('signalHistory');
+  if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="5" class="neutral">No signals</td></tr>'; return; }
+  tb.innerHTML = data.slice().reverse().map(s => {
+    const name = (s.agent_id || '').replace('_agent','').replace('_',' ');
+    const action = s.action || 'hold';
+    return `<tr>
+      <td>${fmtTime(s._ts || s.timestamp)}</td>
+      <td style="color:${agentColor(s.agent_id || '')}">${name}</td>
+      <td><span class="signal-badge ${signalClass(action)}">${action}</span></td>
+      <td>${fmtDec(s.confidence || 0, 2)}</td>
+      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.reason || '-'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderOrderHistory(data) {
+  const tb = document.getElementById('orderHistory');
+  if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="7" class="neutral">No orders</td></tr>'; return; }
+  tb.innerHTML = data.slice().reverse().map(t => {
+    const side = t.side || '?';
+    return `<tr>
+      <td>${fmtTime(t._ts || t.timestamp)}</td>
+      <td>${(t.agent_id || '-').replace('_agent','')}</td>
+      <td><span class="signal-badge ${signalClass(side)}">${side}</span></td>
+      <td>${t.volume || '-'}</td>
+      <td>${fmt(t.price)}</td>
+      <td>${t.success ? '<span class="positive">OK</span>' : '<span class="negative">FAIL</span>'}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.reason || t.message || '-'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function drawGauge(svgId, pct) {
+  const svg = document.getElementById(svgId);
+  svg.innerHTML = '';
+  pct = Math.max(0, Math.min(100, pct || 0));
+  const cx = 70, cy = 70, r = 55;
+  const startAngle = Math.PI;
+  const endAngle = 0;
+  const bg = document.createElementNS('http://www.w3.org/2000/svg','path');
+  const bx1 = cx + r * Math.cos(startAngle), by1 = cy + r * Math.sin(startAngle);
+  const bx2 = cx + r * Math.cos(endAngle), by2 = cy + r * Math.sin(endAngle);
+  bg.setAttribute('d', `M${bx1},${by1} A${r},${r} 0 0 1 ${bx2},${by2}`);
+  bg.setAttribute('fill','none');
+  bg.setAttribute('stroke','var(--surface2)');
+  bg.setAttribute('stroke-width','10');
+  bg.setAttribute('stroke-linecap','round');
+  svg.appendChild(bg);
+
+  if (pct > 0) {
+    const fillAngle = startAngle + (endAngle - startAngle + 2 * Math.PI) % (2 * Math.PI) * (pct / 100);
+    const actual = Math.PI - Math.PI * (pct / 100);
+    const fx = cx + r * Math.cos(actual), fy = cy + r * Math.sin(actual);
+    const fill = document.createElementNS('http://www.w3.org/2000/svg','path');
+    const large = pct > 50 ? 1 : 0;
+    fill.setAttribute('d', `M${bx1},${by1} A${r},${r} 0 ${large} 1 ${fx},${fy}`);
+    fill.setAttribute('fill','none');
+    const col = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--yellow)' : 'var(--green)';
+    fill.setAttribute('stroke', col);
+    fill.setAttribute('stroke-width','10');
+    fill.setAttribute('stroke-linecap','round');
+    svg.appendChild(fill);
+  }
+}
+
+function renderRisk(risk, overview) {
+  if (!risk) return;
+  const pnl = overview ? Math.abs(overview.pnl || 0) : 0;
+  const dailyMax = risk.max_daily_loss || 30000;
+  const totalMax = risk.max_total_loss || 90000;
+  const posMax = risk.max_position_pct || 40;
+
+  const dailyPct = Math.min(100, pnl / dailyMax * 100);
+  const totalPct = Math.min(100, pnl / totalMax * 100);
+  const expPct = overview ? (overview.position_value / (overview.total_value || 1) * 100) : 0;
+
+  drawGauge('gaugeDailyLoss', dailyPct);
+  document.getElementById('dailyLossVal').textContent = fmt(pnl) + ' KRW';
+  document.getElementById('dailyLossLabel').textContent = '/ ' + fmt(dailyMax) + ' KRW';
+
+  drawGauge('gaugeTotalLoss', totalPct);
+  document.getElementById('totalLossVal').textContent = fmt(pnl) + ' KRW';
+  document.getElementById('totalLossLabel').textContent = '/ ' + fmt(totalMax) + ' KRW';
+
+  drawGauge('gaugeExposure', expPct / posMax * 100);
+  document.getElementById('exposureVal').textContent = fmtDec(expPct, 1) + '%';
+  document.getElementById('exposureLabel').textContent = '/ ' + posMax + '%';
+
+  const cb = risk.circuit_breaker || {};
+  const cbEl = document.getElementById('cbStatus');
+  const tripped = cb.tripped || false;
+  cbEl.innerHTML = `
+    <div>Status: <strong class="${tripped ? 'negative' : 'positive'}">${tripped ? 'TRIPPED' : 'Normal'}</strong></div>
+    ${tripped ? '<div>Reason: <strong class="negative">' + (cb.reason || 'unknown') + '</strong></div>' : ''}
+    <div>Kill Switch: <strong class="${risk.kill_switch ? 'negative' : 'positive'}">${risk.kill_switch ? 'ACTIVE' : 'Off'}</strong></div>
+    ${cb.tripped_at ? '<div>Tripped at: ' + fmtTime(cb.tripped_at) + '</div>' : ''}
+  `;
+
+  document.getElementById('riskLimits').innerHTML = `
+    <div>Max Daily Loss: <strong>${fmt(dailyMax)} KRW</strong></div>
+    <div>Max Total Loss: <strong>${fmt(totalMax)} KRW</strong></div>
+    <div>Max Position: <strong>${posMax}%</strong></div>
+    <div>Order Cooldown: <strong>${risk.order_cooldown_sec || '-'}s</strong></div>
+  `;
+}
+
+function renderConfig(data) {
+  const tb = document.getElementById('configTable');
+  if (!data) { tb.innerHTML = '<tr><td colspan="2" class="neutral">No config</td></tr>'; return; }
+  const labels = {
+    markets: 'Markets', dry_run: 'Mode', paper_krw_balance: 'Initial Capital',
+    fee_rate: 'Fee Rate', loop_interval_sec: 'Loop Interval', candle_unit: 'Candle Unit (min)',
+    candle_count: 'Candle Count', order_cooldown_sec: 'Order Cooldown',
+    max_daily_loss_krw: 'Max Daily Loss', max_total_loss_krw: 'Max Total Loss',
+    max_position_pct: 'Max Position %', bench_threshold: 'Bench Threshold',
+    min_active_agents: 'Min Active Agents', rebalance_interval: 'Rebalance Interval (ticks)',
+    softmax_temperature: 'Softmax Temperature', min_alloc_pct: 'Min Allocation %',
+    max_alloc_pct: 'Max Allocation %',
+  };
+  tb.innerHTML = Object.entries(data).map(([k,v]) => {
+    let display = v;
+    if (k === 'dry_run') display = v ? 'Paper Trading' : 'LIVE';
+    else if (k === 'markets') display = Array.isArray(v) ? v.join(', ') : v;
+    else if (typeof v === 'number' && k.includes('krw')) display = fmt(v) + ' KRW';
+    else if (typeof v === 'number' && k.includes('pct')) display = v + '%';
+    return `<tr><td style="font-weight:500">${labels[k] || k}</td><td>${display}</td></tr>`;
+  }).join('');
+}
+
+// === MAIN REFRESH ===
+let cachedOverview = null;
+
+async function refreshAll() {
+  const [overview, leaderboard, signals, orders, risk, config, report] = await Promise.all([
+    fetchJSON('/api/overview'),
+    fetchJSON('/api/leaderboard'),
+    fetchJSON('/api/signals'),
+    fetchJSON('/api/orders'),
+    fetchJSON('/api/risk'),
+    fetchJSON('/api/settings'),
+    fetchJSON('/api/report'),
+  ]);
+
+  cachedOverview = overview;
+
+  renderOverview(overview);
+  renderMiniLeaderboard(leaderboard);
+  renderDonut(leaderboard);
+  renderLatestSignals(signals);
+  renderRecentTrades(orders);
+  renderFullLeaderboard(leaderboard, overview ? overview.agent_wallets : {});
+  renderScoreBreakdown(leaderboard);
+  renderSignalHistory(signals);
+  renderOrderHistory(orders);
+  renderRisk(risk, overview);
+  renderConfig(config);
+  if (report && report.text) {
+    document.getElementById('reportText').textContent = report.text;
+  }
+}
+
+// Initial load
+refreshAll();
+
+// Auto-refresh every 10 seconds
+setInterval(refreshAll, 10000);
+</script>
+</body>
+</html>
