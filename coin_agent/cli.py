@@ -21,6 +21,13 @@ LOGGER = logging.getLogger(__name__)
 
 def _build(root: Path):
     from .engine.loop import build_system
+    result = build_system(root)
+    # Return first 11 elements for backward compatibility (ignore session_mgr, evolution)
+    return result[:11]
+
+
+def _build_full(root: Path):
+    from .engine.loop import build_system
     return build_system(root)
 
 
@@ -255,6 +262,69 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
     run_dashboard(root, host=args.host, port=args.port)
 
 
+def cmd_session(args: argparse.Namespace) -> None:
+    root = Path(args.root)
+    result = _build_full(root)
+    settings, store, state = result[0], result[9], result[10]
+    session_mgr, evolution = result[11], result[12]
+
+    if session_mgr is None:
+        print("Session mode is disabled. Set BOT_SESSION_ENABLED=true in .env")
+        return
+
+    sub = args.session_action
+
+    if sub == "init":
+        session_mgr.initialize_sessions()
+        session_mgr.save_state()
+        print(f"Initialized {len(session_mgr.active_sessions())} sessions:")
+        for s in session_mgr.active_sessions():
+            print(f"  {s.config.session_id} ({s.config.provider_type}) "
+                  f"capital={s.config.initial_capital_krw:,.0f} KRW")
+
+    elif sub == "list":
+        try:
+            session_mgr.load_state()
+        except Exception:
+            pass
+        sessions = session_mgr.active_sessions()
+        if not sessions:
+            print("No active sessions. Run 'session init' first.")
+            return
+        print(f"=== Active Sessions ({len(sessions)}) ===")
+        print(f"{'ID':30s} {'Provider':10s} {'Return%':>8} {'PnL':>12} {'Trades':>7} {'MDD':>7}")
+        print("-" * 80)
+        for s in session_mgr.rank_sessions():
+            print(f"{s.config.session_id:30s} {s.config.provider_type:10s} "
+                  f"{s.return_pct:>+7.2f}% {s.total_pnl_krw:>+12,.0f} "
+                  f"{s.total_trades:>7} {s.max_drawdown_pct:>6.1f}%")
+
+    elif sub == "evolve":
+        try:
+            session_mgr.load_state()
+        except Exception:
+            pass
+        event = evolution.evaluate()
+        if event:
+            print(f"Evolution event:")
+            print(f"  Eliminated: {event['eliminated']} ({event['reason']})")
+            print(f"  New session: {event['new_session']}")
+            session_mgr.save_state()
+        else:
+            print("No evolution needed at this time.")
+
+    elif sub == "history":
+        history = evolution.get_evolution_history()
+        if not history:
+            print("No evolution history yet.")
+            return
+        print(f"=== Evolution History ({len(history)} events) ===")
+        for i, evt in enumerate(history, 1):
+            print(f"  [{i}] eliminated={evt.get('eliminated', '?')} "
+                  f"reason={evt.get('reason', '?')} "
+                  f"new={evt.get('new_session', '?')}")
+
+
 def cmd_history(args: argparse.Namespace) -> None:
     root = Path(args.root)
     settings = Settings.load(root)
@@ -309,6 +379,10 @@ def main() -> None:
     p_dash.add_argument("--host", default="0.0.0.0", help="Bind host")
     p_dash.add_argument("--port", type=int, default=8080, help="Bind port")
 
+    p_session = sub.add_parser("session", help="Manage competing sessions")
+    p_session.add_argument("session_action", choices=["init", "list", "evolve", "history"],
+                           help="init=create sessions, list=show active, evolve=force evaluation, history=evolution log")
+
     p_history = sub.add_parser("history", help="Show trade history")
     p_history.add_argument("--last", type=int, default=20, help="Number of recent trades")
 
@@ -329,6 +403,7 @@ def main() -> None:
         "run": cmd_run,
         "stop": cmd_stop,
         "dashboard": cmd_dashboard,
+        "session": cmd_session,
         "history": cmd_history,
     }
     fn = commands.get(args.command)

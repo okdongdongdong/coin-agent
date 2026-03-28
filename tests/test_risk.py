@@ -22,6 +22,10 @@ def _make_settings(**overrides) -> Settings:
         min_agent_trades=10, bench_threshold=30.0, min_active_agents=2,
         rebalance_interval=50, softmax_temperature=2.0,
         min_alloc_pct=Decimal("5"), max_alloc_pct=Decimal("40"),
+        anthropic_api_key="", openai_api_key="",
+        claude_model="claude-haiku-4-5-20250610", openai_model="gpt-4o-mini",
+        session_enabled=False, session_min_count=3, session_max_count=5,
+        session_eval_interval=5, session_min_ticks_before_eval=10,
     )
     defaults.update(overrides)
     return Settings(**defaults)

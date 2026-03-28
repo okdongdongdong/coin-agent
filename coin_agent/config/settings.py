@@ -66,6 +66,19 @@ class Settings:
     min_alloc_pct: Decimal
     max_alloc_pct: Decimal
 
+    # AI Provider Config
+    anthropic_api_key: str
+    openai_api_key: str
+    claude_model: str
+    openai_model: str
+
+    # Session Config
+    session_enabled: bool
+    session_min_count: int
+    session_max_count: int
+    session_eval_interval: int
+    session_min_ticks_before_eval: int
+
     @classmethod
     def load(cls, root: Path) -> "Settings":
         env = _load_env_file(root / DEFAULT_ENV_FILE)
@@ -96,11 +109,30 @@ class Settings:
             softmax_temperature=float(_get(env, "BOT_SOFTMAX_TEMPERATURE", "2.0")),
             min_alloc_pct=_get_decimal(env, "BOT_MIN_ALLOC_PCT", "5"),
             max_alloc_pct=_get_decimal(env, "BOT_MAX_ALLOC_PCT", "40"),
+            # AI Provider Config
+            anthropic_api_key=_get(env, "ANTHROPIC_API_KEY", ""),
+            openai_api_key=_get(env, "OPENAI_API_KEY", ""),
+            claude_model=_get(env, "BOT_CLAUDE_MODEL", "claude-haiku-4-5-20250610"),
+            openai_model=_get(env, "BOT_OPENAI_MODEL", "gpt-4o-mini"),
+            # Session Config
+            session_enabled=_get_bool(env, "BOT_SESSION_ENABLED", False),
+            session_min_count=_get_int(env, "BOT_SESSION_MIN_COUNT", 3),
+            session_max_count=_get_int(env, "BOT_SESSION_MAX_COUNT", 5),
+            session_eval_interval=_get_int(env, "BOT_SESSION_EVAL_INTERVAL", 5),
+            session_min_ticks_before_eval=_get_int(env, "BOT_SESSION_MIN_TICKS_BEFORE_EVAL", 10),
         )
 
     @property
     def has_private_api_keys(self) -> bool:
         return bool(self.access_key and self.secret_key)
+
+    @property
+    def has_anthropic_key(self) -> bool:
+        return bool(self.anthropic_api_key)
+
+    @property
+    def has_openai_key(self) -> bool:
+        return bool(self.openai_api_key)
 
     @property
     def primary_market(self) -> str:
