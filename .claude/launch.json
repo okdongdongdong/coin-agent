@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bot-loop",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "coin_agent", "run", "--interval", "60"],
+      "port": 0
+    },
+    {
+      "name": "single-tick",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "coin_agent", "tick"],
+      "port": 0
+    },
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "coin_agent", "dashboard"],
+      "port": 8501
+    },
+    {
+      "name": "doctor",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "coin_agent", "doctor"],
+      "port": 0
+    }
+  ]
+}
