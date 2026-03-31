@@ -51,6 +51,13 @@ class Orchestrator:
         asset_currency = self.settings.market_asset(market)
         return self.broker.get_wallet("global", asset_currency)
 
+    def _cap_order_notional(self, notional: Decimal) -> Decimal:
+        capped = max(Decimal("0"), notional)
+        max_order_krw = Decimal(str(self.settings.max_order_krw))
+        if max_order_krw > 0:
+            capped = min(capped, max_order_krw)
+        return capped
+
     def trading_wallet(
         self,
         wallet_id: str,
@@ -231,7 +238,7 @@ class Orchestrator:
             allocation_budget = wallet.krw_available / Decimal(str(max(len(all_signals), 1)))
 
         if action == "buy":
-            max_spend = min(wallet.krw_available, allocation_budget)
+            max_spend = self._cap_order_notional(min(wallet.krw_available, allocation_budget))
             if max_spend < Decimal("5000"):
                 LOGGER.info("Insufficient KRW for buy: %s", wallet.krw_available)
                 return None
@@ -253,7 +260,7 @@ class Orchestrator:
             if wallet.asset_available <= 0:
                 LOGGER.info("No asset to sell")
                 return None
-            max_notional = min(wallet.asset_available * price, allocation_budget)
+            max_notional = self._cap_order_notional(min(wallet.asset_available * price, allocation_budget))
             if max_notional < Decimal("5000"):
                 LOGGER.info("Sellable notional too small: %s", max_notional)
                 return None
@@ -290,7 +297,7 @@ class Orchestrator:
                 for agent_id in session.config.agent_ids
             }
             threshold = Decimal(
-                str(session.config.hyperparams.get("confidence_threshold", 0.3))
+                str(session.config.hyperparams.get("confidence_threshold", 0.25))
             )
             summary = self._summarize_consensus(
                 signals=session_signals,
@@ -306,12 +313,14 @@ class Orchestrator:
                 snapshot.market,
                 session.config.initial_capital_krw,
             )
-            intent = self._build_session_intent(
-                snapshot=snapshot,
-                session=session,
-                wallet=wallet,
-                summary=summary,
-            )
+            intent = None
+            if self.settings.session_execution_mode == "multi":
+                intent = self._build_session_intent(
+                    snapshot=snapshot,
+                    session=session,
+                    wallet=wallet,
+                    summary=summary,
+                )
             decisions.append({
                 "session_id": session.config.session_id,
                 "main_agent_id": session.config.main_agent_id,
@@ -322,8 +331,64 @@ class Orchestrator:
                 "leader_agent_id": summary["leader_agent_id"],
                 "reason": summary["reason"],
                 "intent": intent,
+                "wallet_value": float(wallet.krw_available + wallet.asset_available * snapshot.current_price),
             })
         return decisions
+
+    def build_meta_decision(
+        self,
+        snapshot: MarketSnapshot,
+        session_decisions: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        buy_sessions = [d for d in session_decisions if str(d.get("action", "")).lower() == "buy"]
+        sell_sessions = [d for d in session_decisions if str(d.get("action", "")).lower() == "sell"]
+        action = "hold"
+        agreeing: List[Dict[str, Any]] = []
+
+        if len(buy_sessions) >= 6:
+            action = "buy"
+            agreeing = buy_sessions
+        elif len(sell_sessions) >= 6:
+            action = "sell"
+            agreeing = sell_sessions
+
+        agree_count = len(agreeing)
+        buy_count = len(buy_sessions)
+        sell_count = len(sell_sessions)
+        confidence = 0.0
+        leader_session_id = ""
+        agreeing_session_ids: List[str] = []
+        reason = f"hold (buy_sessions={buy_count}, sell_sessions={sell_count})"
+        intent: Optional[OrderIntent] = None
+
+        if agreeing:
+            confidence = sum(float(item.get("confidence", 0.0)) for item in agreeing) / float(len(agreeing))
+            leader = max(agreeing, key=lambda item: float(item.get("confidence", 0.0)))
+            leader_session_id = str(leader.get("session_id", ""))
+            agreeing_session_ids = [str(item.get("session_id", "")) for item in agreeing]
+            reason = (
+                f"meta_consensus_{action} (agree={agree_count}/9, "
+                f"avg_conf={confidence:.3f}, leader={leader_session_id or '-'})"
+            )
+            intent = self._build_meta_intent(
+                snapshot=snapshot,
+                action=action,
+                confidence=Decimal(str(confidence)),
+                leader_session_id=leader_session_id,
+                reason=reason,
+            )
+
+        return {
+            "action": action,
+            "confidence": confidence,
+            "agree_count": agree_count,
+            "buy_count": buy_count,
+            "sell_count": sell_count,
+            "agreeing_session_ids": agreeing_session_ids,
+            "leader_session_id": leader_session_id,
+            "reason": reason,
+            "intent": intent,
+        }
 
     def execute_order(
         self,
@@ -488,6 +553,7 @@ class Orchestrator:
         snapshot: MarketSnapshot,
         signals: Dict[str, Signal],
         session_decisions: Optional[List[Dict[str, Any]]] = None,
+        meta_decision: Optional[Dict[str, Any]] = None,
         sessions: Optional[List[SessionState]] = None,
     ) -> str:
         """Generate the report text that Claude Code will read."""
@@ -545,7 +611,7 @@ class Orchestrator:
         lines.append("")
 
         if session_decisions:
-            lines.append("--- Session Consensus ---")
+            lines.append("--- Session Votes ---")
             for decision in session_decisions:
                 lines.append(
                     "  "
@@ -558,18 +624,40 @@ class Orchestrator:
                 )
             lines.append("")
 
+        if meta_decision:
+            lines.append("--- Meta Consensus ---")
+            lines.append(
+                "  "
+                f"{str(meta_decision.get('action', 'hold')).upper():5s} "
+                f"(agree={int(meta_decision.get('agree_count', 0))}/9, "
+                f"buy={int(meta_decision.get('buy_count', 0))}, "
+                f"sell={int(meta_decision.get('sell_count', 0))}, "
+                f"leader={meta_decision.get('leader_session_id', '-') or '-'})"
+            )
+            lines.append(f"  Reason: {meta_decision.get('reason', '-')}")
+            lines.append("")
+
         # Portfolio State
         lines.append("--- Portfolio State ---")
-        if sessions:
+        if self.settings.session_enabled and self.settings.session_execution_mode == "multi" and sessions:
             wallet = self.aggregate_session_wallets(snapshot.market, sessions)
+            reserve = self.settings.paper_krw_balance - sum(
+                (session.config.initial_capital_krw for session in sessions),
+                Decimal("0"),
+            )
+            reserve = max(Decimal("0"), reserve)
+            total = wallet.krw_available + wallet.asset_available * snapshot.current_price + reserve
         else:
             wallet = self._global_wallet(snapshot.market)
-        total = wallet.krw_available + wallet.asset_available * snapshot.current_price
+            reserve = Decimal("0")
+            total = wallet.krw_available + wallet.asset_available * snapshot.current_price
         lines.append(f"Total Value: {total:,.0f} KRW")
-        lines.append(f"KRW Available: {wallet.krw_available:,.0f} KRW")
+        lines.append(f"KRW Available: {(wallet.krw_available + reserve):,.0f} KRW")
         if wallet.asset_available > 0:
             asset_val = wallet.asset_available * snapshot.current_price
             lines.append(f"Position: {wallet.asset_available} ({asset_val:,.0f} KRW)")
+        if reserve > 0:
+            lines.append(f"Reserve Capital: {reserve:,.0f} KRW")
         lines.append(f"Initial Capital: {self.settings.paper_krw_balance:,.0f} KRW")
         pnl = total - self.settings.paper_krw_balance
         pnl_pct = float(pnl / self.settings.paper_krw_balance * 100) if self.settings.paper_krw_balance > 0 else 0
@@ -709,6 +797,62 @@ class Orchestrator:
             "override_applied": override_applied,
         }
 
+    def _build_meta_intent(
+        self,
+        snapshot: MarketSnapshot,
+        action: str,
+        confidence: Decimal,
+        leader_session_id: str,
+        reason: str,
+    ) -> Optional[OrderIntent]:
+        wallet = self._global_wallet(snapshot.market)
+        price = snapshot.current_price
+
+        trade_fraction = Decimal("0.18")
+        if confidence >= Decimal("0.82"):
+            trade_fraction = Decimal("0.30")
+        elif confidence >= Decimal("0.70"):
+            trade_fraction = Decimal("0.24")
+
+        if action == "buy":
+            max_spend = self._cap_order_notional(wallet.krw_available * trade_fraction)
+            if max_spend < Decimal("5000"):
+                return None
+            volume = round_down(max_spend / price, Decimal("0.00000001"))
+            if volume <= 0:
+                return None
+            return OrderIntent(
+                market=snapshot.market,
+                side="bid",
+                volume=volume,
+                price=self._price_with_one_tick_edge(price, "bid"),
+                agent_id="meta_consensus",
+                reason=reason + f" leader={leader_session_id or '-'}",
+            )
+
+        if action == "sell":
+            if wallet.asset_available <= 0:
+                return None
+            max_notional = self._cap_order_notional(wallet.asset_available * price * trade_fraction)
+            if max_notional < Decimal("5000"):
+                return None
+            volume = round_down(
+                min(wallet.asset_available, max_notional / price),
+                Decimal("0.00000001"),
+            )
+            if volume <= 0 or volume * price < Decimal("5000"):
+                return None
+            return OrderIntent(
+                market=snapshot.market,
+                side="ask",
+                volume=volume,
+                price=self._price_with_one_tick_edge(price, "ask"),
+                agent_id="meta_consensus",
+                reason=reason + f" leader={leader_session_id or '-'}",
+            )
+
+        return None
+
     def _build_session_intent(
         self,
         snapshot: MarketSnapshot,
@@ -735,7 +879,7 @@ class Orchestrator:
         )
 
         if action == "buy":
-            max_spend = wallet.krw_available * trade_fraction
+            max_spend = self._cap_order_notional(wallet.krw_available * trade_fraction)
             if max_spend < Decimal("5000"):
                 return None
             volume = round_down(max_spend / price, Decimal("0.00000001"))
@@ -756,7 +900,13 @@ class Orchestrator:
 
         if wallet.asset_available <= 0:
             return None
-        volume = round_down(wallet.asset_available * trade_fraction, Decimal("0.00000001"))
+        max_notional = self._cap_order_notional(wallet.asset_available * price * trade_fraction)
+        if max_notional < Decimal("5000"):
+            return None
+        volume = round_down(
+            min(wallet.asset_available, max_notional / price),
+            Decimal("0.00000001"),
+        )
         if volume <= 0 or volume * price < Decimal("5000"):
             return None
         return OrderIntent(

@@ -18,6 +18,7 @@ def _make_env() -> tuple:
         paper_krw_balance=Decimal("300000"), fee_rate=Decimal("0.0025"),
         order_cooldown_sec=60, max_daily_loss_krw=Decimal("30000"),
         max_total_loss_krw=Decimal("90000"), max_position_pct=Decimal("40"),
+        max_order_krw=Decimal("100000"),
         min_agent_trades=10, bench_threshold=30.0, min_active_agents=2,
         rebalance_interval=50, softmax_temperature=2.0,
         min_alloc_pct=Decimal("5"), max_alloc_pct=Decimal("40"),
@@ -25,7 +26,7 @@ def _make_env() -> tuple:
         claude_backend="anthropic",
         claude_model="claude-haiku-4-5-20250610", openai_model="gpt-4o-mini",
         openai_backend="api",
-        session_enabled=False, session_min_count=3, session_max_count=5,
+        session_enabled=False, session_execution_mode="multi", session_min_count=3, session_max_count=5,
         session_eval_interval=5, session_min_ticks_before_eval=10,
     )
     store = JsonlStore(data_dir)

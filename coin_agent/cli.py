@@ -284,7 +284,7 @@ def cmd_session(args: argparse.Namespace) -> None:
         for s in session_mgr.active_sessions():
             print(
                 f"  {s.config.session_id} (main={s.config.main_agent_id}, "
-                f"capital={s.config.initial_capital_krw:,.0f} KRW)"
+                f"weights={json.dumps(s.config.vote_weights, ensure_ascii=False)})"
             )
 
     elif sub == "list":
@@ -297,21 +297,23 @@ def cmd_session(args: argparse.Namespace) -> None:
             print("No active sessions. Run 'session init' first.")
             return
         print(f"=== Active Sessions ({len(sessions)}) ===")
-        print(f"{'ID':30s} {'Main':18s} {'Action':8s} {'Return%':>8} {'PnL':>12} {'Trades':>7} {'MDD':>7}")
-        print("-" * 100)
+        print(f"{'ID':26s} {'Main':18s} {'Action':8s} {'Votes':>7} {'Agree%':>8} {'ExecWin%':>9} {'Exec':>6}")
+        print("-" * 96)
         for s in session_mgr.rank_sessions():
+            agree_pct = (s.agreement_count / s.vote_count * 100) if s.vote_count else 0.0
+            exec_win_pct = (s.winning_trades / s.executed_count * 100) if s.executed_count else 0.0
             print(
-                f"{s.config.session_id:30s} {s.config.main_agent_id:18s} "
-                f"{s.latest_action.upper():8s} {s.return_pct:>+7.2f}% "
-                f"{s.total_pnl_krw:>+12,.0f} {s.total_trades:>7} "
-                f"{s.max_drawdown_pct:>6.1f}%"
+                f"{s.config.session_id:26s} {s.config.main_agent_id:18s} "
+                f"{s.latest_action.upper():8s} {s.vote_count:>7} "
+                f"{agree_pct:>7.1f}% {exec_win_pct:>8.1f}% "
+                f"{s.executed_count:>6}"
             )
 
     elif sub == "evolve":
-        print("Fixed 4-session consensus mode does not use session evolution.")
+        print("Fixed 9-session meta-consensus mode does not use session evolution.")
 
     elif sub == "history":
-        print("Fixed 4-session consensus mode does not record evolution history.")
+        print("Fixed 9-session meta-consensus mode does not record evolution history.")
 
 
 def cmd_history(args: argparse.Namespace) -> None:

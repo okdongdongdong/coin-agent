@@ -62,6 +62,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(self.api.signals())
         elif path == "/api/orders":
             self._send_json(self.api.orders())
+        elif path == "/api/meta_decisions":
+            self._send_json(self.api.meta_decisions())
+        elif path == "/api/session_decisions":
+            self._send_json(self.api.session_decisions())
+        elif path == "/api/session_timeline":
+            self._send_json(self.api.session_timeline())
+        elif path == "/api/equity":
+            self._send_json(self.api.equity_history())
         elif path == "/api/allocations":
             self._send_json(self.api.allocations())
         elif path == "/api/risk":

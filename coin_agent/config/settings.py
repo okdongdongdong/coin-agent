@@ -67,6 +67,7 @@ class Settings:
     max_daily_loss_krw: Decimal
     max_total_loss_krw: Decimal
     max_position_pct: Decimal
+    max_order_krw: Decimal
     min_agent_trades: int
     bench_threshold: float
     min_active_agents: int
@@ -85,10 +86,12 @@ class Settings:
 
     # Session Config
     session_enabled: bool
+    session_execution_mode: str
     session_min_count: int
     session_max_count: int
     session_eval_interval: int
     session_min_ticks_before_eval: int
+    session_capital_krw: Decimal = Decimal("0")
 
     @classmethod
     def load(cls, root: Path) -> "Settings":
@@ -96,6 +99,10 @@ class Settings:
         data_dir = root / _get(env, "BOT_DATA_DIR", "data")
         markets_raw = _get(env, "BOT_MARKETS", "KRW-BTC")
         markets = [m.strip().upper() for m in markets_raw.split(",") if m.strip()]
+        paper_krw_balance = _get_decimal(env, "BOT_PAPER_KRW_BALANCE", "300000")
+        session_min_count = _get_int(env, "BOT_SESSION_MIN_COUNT", 9)
+        session_max_count = _get_int(env, "BOT_SESSION_MAX_COUNT", 9)
+        default_session_capital = Decimal("0")
         return cls(
             access_key=_get(env, "BITHUMB_ACCESS_KEY", ""),
             secret_key=_get(env, "BITHUMB_SECRET_KEY", ""),
@@ -107,12 +114,13 @@ class Settings:
             request_timeout_sec=_get_int(env, "BOT_REQUEST_TIMEOUT_SEC", 10),
             candle_unit=_get_int(env, "BOT_CANDLE_UNIT", 1),
             candle_count=_get_int(env, "BOT_CANDLE_COUNT", 200),
-            paper_krw_balance=_get_decimal(env, "BOT_PAPER_KRW_BALANCE", "300000"),
+            paper_krw_balance=paper_krw_balance,
             fee_rate=_get_decimal(env, "BOT_FEE_RATE", "0.0025"),
             order_cooldown_sec=_get_int(env, "BOT_ORDER_COOLDOWN_SEC", 60),
             max_daily_loss_krw=_get_decimal(env, "BOT_MAX_DAILY_LOSS_KRW", "30000"),
             max_total_loss_krw=_get_decimal(env, "BOT_MAX_TOTAL_LOSS_KRW", "90000"),
             max_position_pct=_get_decimal(env, "BOT_MAX_POSITION_PCT", "40"),
+            max_order_krw=_get_decimal(env, "BOT_MAX_ORDER_KRW", "100000"),
             min_agent_trades=_get_int(env, "BOT_MIN_AGENT_TRADES", 10),
             bench_threshold=float(_get(env, "BOT_BENCH_THRESHOLD", "30")),
             min_active_agents=_get_int(env, "BOT_MIN_ACTIVE_AGENTS", 2),
@@ -139,8 +147,19 @@ class Settings:
             ),
             # Session Config
             session_enabled=_get_bool(env, "BOT_SESSION_ENABLED", False),
-            session_min_count=_get_int(env, "BOT_SESSION_MIN_COUNT", 3),
-            session_max_count=_get_int(env, "BOT_SESSION_MAX_COUNT", 5),
+            session_execution_mode=_get_backend(
+                env,
+                "BOT_SESSION_EXECUTION_MODE",
+                "multi",
+                {"multi", "meta"},
+            ),
+            session_min_count=session_min_count,
+            session_max_count=session_max_count,
+            session_capital_krw=_get_decimal(
+                env,
+                "BOT_SESSION_CAPITAL_KRW",
+                str(default_session_capital),
+            ),
             session_eval_interval=_get_int(env, "BOT_SESSION_EVAL_INTERVAL", 5),
             session_min_ticks_before_eval=_get_int(env, "BOT_SESSION_MIN_TICKS_BEFORE_EVAL", 10),
         )

@@ -72,6 +72,18 @@ class _LiveBroker:
         return {"uuid": order_id, "state": "cancel"}
 
 
+class _HighBalanceBroker:
+    def get_wallet(self, agent_id: str = "global", asset_currency: str = "") -> WalletSnapshot:
+        return WalletSnapshot(
+            krw_available=Decimal("600000"),
+            asset_available=Decimal("0.03"),
+            avg_buy_price=Decimal("100000000"),
+        )
+
+    def execute(self, intent, agent_id: str = "global"):
+        raise AssertionError("execute should not be called in this test")
+
+
 def _settings(root: Path) -> Settings:
     return Settings(
         access_key="",
@@ -90,6 +102,7 @@ def _settings(root: Path) -> Settings:
         max_daily_loss_krw=Decimal("30000"),
         max_total_loss_krw=Decimal("90000"),
         max_position_pct=Decimal("40"),
+        max_order_krw=Decimal("100000"),
         min_agent_trades=10,
         bench_threshold=30.0,
         min_active_agents=2,
@@ -104,6 +117,7 @@ def _settings(root: Path) -> Settings:
         openai_model="gpt-5.4",
         openai_backend="codex_cli",
         session_enabled=False,
+        session_execution_mode="multi",
         session_min_count=3,
         session_max_count=5,
         session_eval_interval=5,
@@ -189,7 +203,7 @@ def test_build_session_decisions_bias_main_agent_vote():
         store=store,
         state=state,
     )
-    session_mgr = SessionManager(settings=settings, store=store, min_sessions=4, max_sessions=4)
+    session_mgr = SessionManager(settings=settings, store=store, min_sessions=9, max_sessions=9)
     sessions = session_mgr.initialize_sessions()
 
     decisions = orchestrator.build_session_decisions(
@@ -204,13 +218,13 @@ def test_build_session_decisions_bias_main_agent_vote():
     )
 
     decisions_by_id = {item["session_id"]: item for item in decisions}
-    assert decisions_by_id["session_sma_main"]["action"] == "buy"
-    assert decisions_by_id["session_sma_main"]["intent"] is not None
-    assert decisions_by_id["session_breakout_main"]["action"] == "hold"
-    assert decisions_by_id["session_breakout_main"]["intent"] is None
+    assert decisions_by_id["session_trend_core"]["action"] == "buy"
+    assert decisions_by_id["session_trend_core"]["intent"] is not None
+    assert decisions_by_id["session_breakout_core"]["action"] == "hold"
+    assert decisions_by_id["session_breakout_core"]["intent"] is None
 
 
-def test_build_session_decisions_uses_lowered_consensus_threshold():
+def test_build_session_decisions_uses_current_consensus_threshold():
     root = Path(tempfile.mkdtemp())
     settings = _settings(root)
     store = JsonlStore(settings.data_dir)
@@ -231,24 +245,25 @@ def test_build_session_decisions_uses_lowered_consensus_threshold():
         store=store,
         state=state,
     )
-    session_mgr = SessionManager(settings=settings, store=store, min_sessions=4, max_sessions=4)
+    session_mgr = SessionManager(settings=settings, store=store, min_sessions=9, max_sessions=9)
     sessions = session_mgr.initialize_sessions()
 
     decisions = orchestrator.build_session_decisions(
         snapshot=_Snapshot(),
         tech_signals={
             "sma_agent": Signal("sma_agent", "hold", 0.0, "hold"),
-            "momentum_agent": Signal("momentum_agent", "buy", 0.4, "momentum"),
-            "mean_reversion_agent": Signal("mean_reversion_agent", "buy", 0.55, "mean"),
+            "momentum_agent": Signal("momentum_agent", "buy", 0.5, "momentum"),
+            "alpha_agent": Signal("alpha_agent", "buy", 0.6, "alpha"),
+            "turbo_breakout_agent": Signal("turbo_breakout_agent", "buy", 0.8, "turbo"),
             "breakout_agent": Signal("breakout_agent", "hold", 0.0, "hold"),
         },
         sessions=sessions,
     )
 
     decisions_by_id = {item["session_id"]: item for item in decisions}
-    assert decisions_by_id["session_momentum_main"]["action"] == "buy"
-    assert decisions_by_id["session_momentum_main"]["intent"] is not None
-    assert "buy_w=0.270" in decisions_by_id["session_momentum_main"]["reason"]
+    assert decisions_by_id["session_momentum_core"]["action"] == "buy"
+    assert decisions_by_id["session_momentum_core"]["intent"] is not None
+    assert "buy_w=0.450" in decisions_by_id["session_momentum_core"]["reason"]
 
 
 def test_build_session_decisions_allows_main_override():
@@ -272,7 +287,7 @@ def test_build_session_decisions_allows_main_override():
         store=store,
         state=state,
     )
-    session_mgr = SessionManager(settings=settings, store=store, min_sessions=4, max_sessions=4)
+    session_mgr = SessionManager(settings=settings, store=store, min_sessions=9, max_sessions=9)
     sessions = session_mgr.initialize_sessions()
 
     decisions = orchestrator.build_session_decisions(
@@ -280,20 +295,19 @@ def test_build_session_decisions_allows_main_override():
         tech_signals={
             "sma_agent": Signal("sma_agent", "hold", 0.0, "hold"),
             "momentum_agent": Signal("momentum_agent", "hold", 0.0, "hold"),
-            "mean_reversion_agent": Signal("mean_reversion_agent", "buy", 0.55, "lower band"),
-            "breakout_agent": Signal("breakout_agent", "hold", 0.0, "hold"),
+            "breakout_agent": Signal("breakout_agent", "sell", 0.7, "volume breakout"),
         },
         sessions=sessions,
     )
 
     decisions_by_id = {item["session_id"]: item for item in decisions}
-    mean_session = decisions_by_id["session_mean_reversion_main"]
-    assert mean_session["action"] == "buy"
-    assert mean_session["intent"] is not None
-    assert "main_override_buy" in mean_session["reason"]
+    breakout_session = decisions_by_id["session_breakout_core"]
+    assert breakout_session["action"] == "sell"
+    assert breakout_session["intent"] is None
+    assert "main_override_sell" in breakout_session["reason"]
 
 
-def test_build_session_decisions_caps_order_size_to_twenty_percent():
+def test_build_meta_decision_sizes_order_from_average_confidence():
     root = Path(tempfile.mkdtemp())
     settings = _settings(root)
     store = JsonlStore(settings.data_dir)
@@ -314,23 +328,24 @@ def test_build_session_decisions_caps_order_size_to_twenty_percent():
         store=store,
         state=state,
     )
-    session_mgr = SessionManager(settings=settings, store=store, min_sessions=4, max_sessions=4)
-    sessions = session_mgr.initialize_sessions()
-
-    decisions = orchestrator.build_session_decisions(
+    meta = orchestrator.build_meta_decision(
         snapshot=_Snapshot(),
-        tech_signals={
-            "sma_agent": Signal("sma_agent", "hold", 0.0, "hold"),
-            "momentum_agent": Signal("momentum_agent", "hold", 0.0, "hold"),
-            "mean_reversion_agent": Signal("mean_reversion_agent", "buy", 0.80, "lower band"),
-            "breakout_agent": Signal("breakout_agent", "hold", 0.0, "hold"),
-        },
-        sessions=sessions,
+        session_decisions=[
+            {"session_id": "s1", "action": "buy", "confidence": 0.60},
+            {"session_id": "s2", "action": "buy", "confidence": 0.65},
+            {"session_id": "s3", "action": "buy", "confidence": 0.70},
+            {"session_id": "s4", "action": "buy", "confidence": 0.66},
+            {"session_id": "s5", "action": "buy", "confidence": 0.64},
+            {"session_id": "s6", "action": "buy", "confidence": 0.63},
+            {"session_id": "s7", "action": "hold", "confidence": 0.0},
+            {"session_id": "s8", "action": "sell", "confidence": 0.52},
+            {"session_id": "s9", "action": "hold", "confidence": 0.0},
+        ],
     )
 
-    mean_session = {item["session_id"]: item for item in decisions}["session_mean_reversion_main"]
-    assert mean_session["intent"] is not None
-    assert mean_session["intent"].volume == Decimal("0.00018750")
+    assert meta["action"] == "buy"
+    assert meta["intent"] is not None
+    assert meta["intent"].volume == Decimal("0.00054")
 
 
 def test_decide_uses_one_tick_offset_prices():
@@ -380,7 +395,7 @@ def test_decide_uses_one_tick_offset_prices():
     assert sell_intent.price == Decimal("99999000")
 
 
-def test_build_session_decisions_use_one_tick_buy_price():
+def test_build_meta_decision_uses_one_tick_buy_price():
     root = Path(tempfile.mkdtemp())
     settings = _settings(root)
     store = JsonlStore(settings.data_dir)
@@ -401,23 +416,59 @@ def test_build_session_decisions_use_one_tick_buy_price():
         store=store,
         state=state,
     )
-    session_mgr = SessionManager(settings=settings, store=store, min_sessions=4, max_sessions=4)
-    sessions = session_mgr.initialize_sessions()
-
-    decisions = orchestrator.build_session_decisions(
+    meta = orchestrator.build_meta_decision(
         snapshot=_Snapshot(),
-        tech_signals={
-            "sma_agent": Signal("sma_agent", "buy", 0.9, "sma"),
-            "momentum_agent": Signal("momentum_agent", "hold", 0.0, "hold"),
-            "mean_reversion_agent": Signal("mean_reversion_agent", "hold", 0.0, "hold"),
-            "breakout_agent": Signal("breakout_agent", "hold", 0.0, "hold"),
-        },
-        sessions=sessions,
+        session_decisions=[
+            {"session_id": "s1", "action": "buy", "confidence": 0.80},
+            {"session_id": "s2", "action": "buy", "confidence": 0.75},
+            {"session_id": "s3", "action": "buy", "confidence": 0.78},
+            {"session_id": "s4", "action": "buy", "confidence": 0.82},
+            {"session_id": "s5", "action": "buy", "confidence": 0.79},
+            {"session_id": "s6", "action": "buy", "confidence": 0.81},
+            {"session_id": "s7", "action": "hold", "confidence": 0.0},
+            {"session_id": "s8", "action": "sell", "confidence": 0.40},
+            {"session_id": "s9", "action": "hold", "confidence": 0.0},
+        ],
     )
 
-    sma_session = {item["session_id"]: item for item in decisions}["session_sma_main"]
-    assert sma_session["intent"] is not None
-    assert sma_session["intent"].price == Decimal("100001000")
+    assert meta["intent"] is not None
+    assert meta["intent"].price == Decimal("100001000")
+
+
+def test_build_meta_decision_caps_single_order_to_max_order_krw():
+    root = Path(tempfile.mkdtemp())
+    settings = _settings(root)
+    store = JsonlStore(settings.data_dir)
+    state = StateStore(store)
+    registry = AgentRegistry()
+
+    orchestrator = Orchestrator(
+        settings=settings,
+        registry=registry,
+        broker=_HighBalanceBroker(),
+        perf_tracker=PerformanceTracker(store),
+        scorer=PerformanceScorer(),
+        pos_tracker=_PositionTracker(),
+        store=store,
+        state=state,
+    )
+    meta = orchestrator.build_meta_decision(
+        snapshot=_Snapshot(),
+        session_decisions=[
+            {"session_id": "s1", "action": "buy", "confidence": 0.92},
+            {"session_id": "s2", "action": "buy", "confidence": 0.88},
+            {"session_id": "s3", "action": "buy", "confidence": 0.91},
+            {"session_id": "s4", "action": "buy", "confidence": 0.89},
+            {"session_id": "s5", "action": "buy", "confidence": 0.90},
+            {"session_id": "s6", "action": "buy", "confidence": 0.87},
+            {"session_id": "s7", "action": "hold", "confidence": 0.0},
+            {"session_id": "s8", "action": "hold", "confidence": 0.0},
+            {"session_id": "s9", "action": "hold", "confidence": 0.0},
+        ],
+    )
+
+    assert meta["intent"] is not None
+    assert meta["intent"].volume == Decimal("0.00100000")
 
 
 def test_execute_order_live_session_stores_pending_until_checked():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +15,9 @@ from ..agents.strategies.sma_agent import SMAAgent
 from ..agents.strategies.momentum_agent import MomentumAgent
 from ..agents.strategies.mean_reversion_agent import MeanReversionAgent
 from ..agents.strategies.breakout_agent import BreakoutAgent
+from ..agents.strategies.alpha_agent import AlphaAgent
+from ..agents.strategies.turbo_breakout_agent import TurboBreakoutAgent
+from ..agents.strategies.steady_guard_agent import SteadyGuardAgent
 from ..execution.broker import LiveBroker, PaperBroker
 from ..execution.position_tracker import PositionTracker
 from ..performance.tracker import PerformanceTracker
@@ -45,6 +49,9 @@ def build_system(root: Path) -> tuple:
     registry.register(MomentumAgent())
     registry.register(MeanReversionAgent())
     registry.register(BreakoutAgent())
+    registry.register(AlphaAgent())
+    registry.register(TurboBreakoutAgent())
+    registry.register(SteadyGuardAgent())
 
     broker = PaperBroker(settings, state) if settings.dry_run else LiveBroker(client)
     pos_tracker = PositionTracker(state)
@@ -72,7 +79,10 @@ def build_system(root: Path) -> tuple:
             min_sessions=settings.session_min_count,
             max_sessions=settings.session_max_count,
         )
-        LOGGER.info("Session consensus mode enabled (4 fixed sessions)")
+        LOGGER.info(
+            "Session %s mode enabled (7 agents / 9 sessions)",
+            settings.session_execution_mode,
+        )
 
     return settings, client, collector, registry, orchestrator, broker, perf_tracker, scorer, leaderboard, store, state, session_mgr, None
 
@@ -105,6 +115,18 @@ def run_loop(root: Path, interval: int = 0, max_ticks: int = 0) -> None:
         except Exception as e:
             LOGGER.error("Session init error: %s", e, exc_info=True)
 
+    system_mode = (
+        f"session_{settings.session_execution_mode}"
+        if session_mgr is not None else "global_consensus"
+    )
+    bot = state.get_bot_state()
+    if bot.get("system_mode") != system_mode:
+        bot["system_mode"] = system_mode
+        bot["system_started_at"] = time.time()
+    if session_mgr is not None:
+        bot["active_sessions"] = len(session_mgr.active_sessions())
+    state.save_bot_state(bot)
+
     try:
         while True:
             # Check kill switch
@@ -120,12 +142,6 @@ def run_loop(root: Path, interval: int = 0, max_ticks: int = 0) -> None:
                 snapshot = collector.snapshot(market)
                 pending_outcomes = orchestrator.reconcile_pending_live_orders(tick_count)
                 for outcome in pending_outcomes:
-                    session_id = str(outcome.get("session_id", ""))
-                    if session_mgr is not None and session_id:
-                        session_mgr.record_trade(
-                            session_id,
-                            outcome.get("profitable"),
-                        )
                     LOGGER.info(
                         "Pending order reconciled: wallet=%s order=%s filled=%s state=%s",
                         outcome.get("wallet_id", ""),
@@ -133,18 +149,29 @@ def run_loop(root: Path, interval: int = 0, max_ticks: int = 0) -> None:
                         outcome.get("filled_volume", "0"),
                         outcome.get("state", ""),
                     )
+                    if session_mgr is not None and settings.session_execution_mode == "multi":
+                        session_id = str(outcome.get("session_id", ""))
+                        if session_id:
+                            session_mgr.record_trade(
+                                session_id=session_id,
+                                profitable=outcome.get("profitable"),
+                            )
                 signals = orchestrator.run_tick(snapshot)
-
-                if session_mgr is not None:
-                    portfolio_wallet = orchestrator.aggregate_session_wallets(
+                reserve_capital = Decimal("0")
+                if session_mgr is not None and settings.session_execution_mode == "multi":
+                    wallet = orchestrator.aggregate_session_wallets(
                         market=snapshot.market,
                         sessions=session_mgr.active_sessions(),
-                    ) if settings.dry_run else broker.get_wallet("global", settings.market_asset(market))
+                    )
+                    reserve_capital = session_mgr.reserve_capital()
+                    current_value = (
+                        wallet.krw_available
+                        + wallet.asset_available * snapshot.current_price
+                        + reserve_capital
+                    )
                 else:
-                    portfolio_wallet = broker.get_wallet("global", settings.market_asset(market))
-
-                wallet = portfolio_wallet
-                current_value = wallet.krw_available + wallet.asset_available * snapshot.current_price
+                    wallet = broker.get_wallet("global", settings.market_asset(market))
+                    current_value = wallet.krw_available + wallet.asset_available * snapshot.current_price
                 daily_pnl = portfolio_risk.get_daily_pnl()
                 orchestrator_metrics = perf_tracker.get_metrics("orchestrator")
                 breaker = circuit_breaker.check(
@@ -157,6 +184,7 @@ def run_loop(root: Path, interval: int = 0, max_ticks: int = 0) -> None:
                     break
 
                 session_decisions = None
+                meta_decision = None
                 if session_mgr is not None:
                     session_decisions = orchestrator.build_session_decisions(
                         snapshot=snapshot,
@@ -185,126 +213,229 @@ def run_loop(root: Path, interval: int = 0, max_ticks: int = 0) -> None:
                             "sell_vote": str(decision["sell_vote"]),
                             "leader_agent_id": decision["leader_agent_id"],
                             "reason": decision["reason"],
+                            "execution_mode": settings.session_execution_mode,
+                        })
+                    if settings.session_execution_mode == "meta":
+                        meta_decision = orchestrator.build_meta_decision(
+                            snapshot=snapshot,
+                            session_decisions=session_decisions,
+                        )
+                        store.append("meta_decisions", {
+                            "tick": tick_count,
+                            "market": snapshot.market,
+                            "action": meta_decision["action"],
+                            "confidence": meta_decision["confidence"],
+                            "agree_count": meta_decision["agree_count"],
+                            "buy_count": meta_decision["buy_count"],
+                            "sell_count": meta_decision["sell_count"],
+                            "agreeing_session_ids": meta_decision["agreeing_session_ids"],
+                            "leader_session_id": meta_decision["leader_session_id"],
+                            "reason": meta_decision["reason"],
+                            "execution_mode": settings.session_execution_mode,
                         })
 
-                    for decision in session_decisions:
-                        intent = decision["intent"]
+                        meta_executed = False
+                        intent = meta_decision.get("intent")
                         if intent is None:
-                            continue
-
-                        session = session_mgr.get_session(decision["session_id"])
-                        if session is None:
-                            continue
-                        if orchestrator.has_pending_live_order(session.config.session_id):
-                            LOGGER.info(
-                                "Skipping %s: pending live order still open",
-                                session.config.session_id,
-                            )
-                            continue
-                        session_wallet = orchestrator.trading_wallet(
-                            session.config.session_id,
-                            snapshot.market,
-                            session.config.initial_capital_krw,
-                        )
-                        session_value = (
-                            session_wallet.krw_available
-                            + session_wallet.asset_available * snapshot.current_price
-                        )
-                        total_asset_value = wallet.asset_available * snapshot.current_price
-                        portfolio_check = portfolio_risk.check(
-                            intent=intent,
-                            total_krw=wallet.krw_available,
-                            total_asset_value=total_asset_value,
-                        )
-                        if not portfolio_check.allowed:
-                            LOGGER.warning(
-                                "Portfolio risk blocked order for %s: %s",
-                                session.config.session_id,
-                                portfolio_check.reason,
-                            )
-                            store.append("orders", {
-                                "order_id": None,
-                                "side": intent.side,
-                                "volume": str(intent.volume),
-                                "price": str(intent.price),
-                                "agent_id": intent.agent_id,
-                                "session_id": session.config.session_id,
-                                "main_agent_id": session.config.main_agent_id,
-                                "reason": intent.reason,
-                                "success": False,
-                                "message": portfolio_check.reason,
-                                "mode": "paper" if settings.dry_run else "live",
-                            })
-                            continue
-
-                        agent_check = agent_risk.check(
-                            intent=intent,
-                            agent_capital=session_value,
-                            agent_krw=session_wallet.krw_available,
-                            agent_asset_value=session_wallet.asset_available * snapshot.current_price,
-                        )
-                        if not agent_check.allowed:
-                            LOGGER.warning(
-                                "Session risk blocked order for %s: %s",
-                                session.config.session_id,
-                                agent_check.reason,
-                            )
-                            store.append("orders", {
-                                "order_id": None,
-                                "side": intent.side,
-                                "volume": str(intent.volume),
-                                "price": str(intent.price),
-                                "agent_id": intent.agent_id,
-                                "session_id": session.config.session_id,
-                                "main_agent_id": session.config.main_agent_id,
-                                "reason": intent.reason,
-                                "success": False,
-                                "message": agent_check.reason,
-                                "mode": "paper" if settings.dry_run else "live",
-                            })
-                            continue
-
-                        profitable = None
-                        if intent.side == "ask" and session_wallet.avg_buy_price > 0:
-                            profitable = intent.price > session_wallet.avg_buy_price
-
-                        result = orchestrator.execute_order(
-                            intent,
-                            wallet_id=session.config.session_id,
-                            initial_capital_krw=session.config.initial_capital_krw,
-                            extra_log={
-                                "session_id": session.config.session_id,
-                                "main_agent_id": session.config.main_agent_id,
-                                "leader_agent_id": decision["leader_agent_id"],
-                            },
-                        )
-                        if result.success and (settings.dry_run or result.message == "filled"):
-                            session_mgr.record_trade(session.config.session_id, profitable)
-                            LOGGER.info(
-                                "Session order %s: %s %s @ %s (%s)",
-                                session.config.session_id,
-                                intent.side,
-                                intent.volume,
-                                intent.price,
-                                result.order_id or "no-order-id",
-                            )
-                        elif result.success:
-                            LOGGER.info(
-                                "Session order submitted %s: %s %s @ %s (%s)",
-                                session.config.session_id,
-                                intent.side,
-                                intent.volume,
-                                intent.price,
-                                result.order_id or "no-order-id",
-                            )
+                            LOGGER.info("Meta consensus: %s", meta_decision["reason"])
+                        elif orchestrator.has_pending_live_order("global"):
+                            LOGGER.info("Skipping meta order: pending live order still open")
                         else:
-                            LOGGER.warning("Order failed for %s: %s", session.config.session_id, result.message)
+                            total_asset_value = wallet.asset_available * snapshot.current_price
+                            portfolio_check = portfolio_risk.check(
+                                intent=intent,
+                                total_krw=wallet.krw_available,
+                                total_asset_value=total_asset_value,
+                            )
+                            if not portfolio_check.allowed:
+                                LOGGER.warning("Portfolio risk blocked meta order: %s", portfolio_check.reason)
+                                store.append("orders", {
+                                    "order_id": None,
+                                    "side": intent.side,
+                                    "volume": str(intent.volume),
+                                    "price": str(intent.price),
+                                    "agent_id": intent.agent_id,
+                                    "leader_session_id": meta_decision["leader_session_id"],
+                                    "agree_count": meta_decision["agree_count"],
+                                    "agreeing_session_ids": meta_decision["agreeing_session_ids"],
+                                    "reason": intent.reason,
+                                    "success": False,
+                                    "message": portfolio_check.reason,
+                                    "mode": "paper" if settings.dry_run else "live",
+                                    "execution_mode": settings.session_execution_mode,
+                                })
+                            else:
+                                agent_check = agent_risk.check(
+                                    intent=intent,
+                                    agent_capital=current_value,
+                                    agent_krw=wallet.krw_available,
+                                    agent_asset_value=total_asset_value,
+                                )
+                                if not agent_check.allowed:
+                                    LOGGER.warning("Meta agent risk blocked order: %s", agent_check.reason)
+                                    store.append("orders", {
+                                        "order_id": None,
+                                        "side": intent.side,
+                                        "volume": str(intent.volume),
+                                        "price": str(intent.price),
+                                        "agent_id": intent.agent_id,
+                                        "leader_session_id": meta_decision["leader_session_id"],
+                                        "agree_count": meta_decision["agree_count"],
+                                        "agreeing_session_ids": meta_decision["agreeing_session_ids"],
+                                        "reason": intent.reason,
+                                        "success": False,
+                                        "message": agent_check.reason,
+                                        "mode": "paper" if settings.dry_run else "live",
+                                        "execution_mode": settings.session_execution_mode,
+                                    })
+                                else:
+                                    result = orchestrator.execute_order(
+                                        intent,
+                                        wallet_id="global",
+                                        initial_capital_krw=settings.paper_krw_balance,
+                                        extra_log={
+                                            "leader_session_id": meta_decision["leader_session_id"],
+                                            "agree_count": meta_decision["agree_count"],
+                                            "agreeing_session_ids": meta_decision["agreeing_session_ids"],
+                                            "meta_action": meta_decision["action"],
+                                            "execution_mode": settings.session_execution_mode,
+                                        },
+                                    )
+                                    meta_executed = bool(result.success)
+                                    if result.success:
+                                        LOGGER.info(
+                                            "Meta order %s: %s %s @ %s (%s)",
+                                            result.message,
+                                            intent.side,
+                                            intent.volume,
+                                            intent.price,
+                                            result.order_id or "no-order-id",
+                                        )
+                                    else:
+                                        LOGGER.warning("Meta order failed: %s", result.message)
 
-                        if session_mgr is not None:
-                            wallet = orchestrator.aggregate_session_wallets(
+                        session_mgr.record_meta_consensus(
+                            final_action=str(meta_decision["action"]),
+                            executed=meta_executed,
+                            agreeing_session_ids=list(meta_decision["agreeing_session_ids"]),
+                        )
+                    else:
+                        for decision in session_decisions:
+                            session_id = str(decision["session_id"])
+                            session = session_mgr.get_session(session_id)
+                            if session is None:
+                                continue
+                            session_wallet = orchestrator.trading_wallet(
+                                session_id,
+                                snapshot.market,
+                                session.config.initial_capital_krw,
+                            )
+                            session_value = (
+                                session_wallet.krw_available
+                                + session_wallet.asset_available * snapshot.current_price
+                            )
+                            session_mgr.update_session_value(session_id, session_value)
+
+                            intent = decision.get("intent")
+                            if intent is None:
+                                continue
+                            if orchestrator.has_pending_live_order(session_id):
+                                LOGGER.info(
+                                    "Skipping %s order: pending live order still open",
+                                    session_id,
+                                )
+                                continue
+
+                            aggregate_wallet = orchestrator.aggregate_session_wallets(
                                 market=snapshot.market,
                                 sessions=session_mgr.active_sessions(),
-                            ) if settings.dry_run else broker.get_wallet("global", settings.market_asset(market))
+                            )
+                            total_asset_value = aggregate_wallet.asset_available * snapshot.current_price
+                            portfolio_check = portfolio_risk.check(
+                                intent=intent,
+                                total_krw=aggregate_wallet.krw_available + reserve_capital,
+                                total_asset_value=total_asset_value,
+                            )
+                            if not portfolio_check.allowed:
+                                LOGGER.warning(
+                                    "Portfolio risk blocked %s order: %s",
+                                    session_id,
+                                    portfolio_check.reason,
+                                )
+                                store.append("orders", {
+                                    "order_id": None,
+                                    "side": intent.side,
+                                    "volume": str(intent.volume),
+                                    "price": str(intent.price),
+                                    "agent_id": intent.agent_id,
+                                    "session_id": session_id,
+                                    "main_agent_id": session.config.main_agent_id,
+                                    "leader_agent_id": decision["leader_agent_id"],
+                                    "reason": intent.reason,
+                                    "success": False,
+                                    "message": portfolio_check.reason,
+                                    "mode": "paper" if settings.dry_run else "live",
+                                    "execution_mode": settings.session_execution_mode,
+                                })
+                                continue
+
+                            session_asset_value = session_wallet.asset_available * snapshot.current_price
+                            agent_check = agent_risk.check(
+                                intent=intent,
+                                agent_capital=session_value,
+                                agent_krw=session_wallet.krw_available,
+                                agent_asset_value=session_asset_value,
+                            )
+                            if not agent_check.allowed:
+                                LOGGER.warning(
+                                    "Session risk blocked %s order: %s",
+                                    session_id,
+                                    agent_check.reason,
+                                )
+                                store.append("orders", {
+                                    "order_id": None,
+                                    "side": intent.side,
+                                    "volume": str(intent.volume),
+                                    "price": str(intent.price),
+                                    "agent_id": intent.agent_id,
+                                    "session_id": session_id,
+                                    "main_agent_id": session.config.main_agent_id,
+                                    "leader_agent_id": decision["leader_agent_id"],
+                                    "reason": intent.reason,
+                                    "success": False,
+                                    "message": agent_check.reason,
+                                    "mode": "paper" if settings.dry_run else "live",
+                                    "execution_mode": settings.session_execution_mode,
+                                })
+                                continue
+
+                            result = orchestrator.execute_order(
+                                intent,
+                                wallet_id=session_id,
+                                initial_capital_krw=session.config.initial_capital_krw,
+                                extra_log={
+                                    "session_id": session_id,
+                                    "main_agent_id": session.config.main_agent_id,
+                                    "leader_agent_id": decision["leader_agent_id"],
+                                    "execution_mode": settings.session_execution_mode,
+                                },
+                            )
+                            if result.success:
+                                LOGGER.info(
+                                    "Session order %s: %s %s @ %s (%s)",
+                                    result.message,
+                                    intent.side,
+                                    intent.volume,
+                                    intent.price,
+                                    result.order_id or "no-order-id",
+                                )
+                                if settings.dry_run:
+                                    profitable = None
+                                    if intent.side == "ask" and session_wallet.avg_buy_price > 0:
+                                        profitable = intent.price > session_wallet.avg_buy_price
+                                    session_mgr.record_trade(session_id, profitable)
+                            else:
+                                LOGGER.warning("Session order failed: %s", result.message)
                 else:
                     intent = orchestrator.decide(snapshot, signals)
                     if intent is not None and orchestrator.has_pending_live_order("global"):
@@ -363,28 +494,70 @@ def run_loop(root: Path, interval: int = 0, max_ticks: int = 0) -> None:
                                 else:
                                     LOGGER.warning("Order failed: %s", result.message)
 
+                session_values = {}
+                session_principal_total = Decimal("0")
+                display_wallet = wallet
+                display_reserve_capital = reserve_capital
+                display_total_value = current_value
                 if session_mgr is not None:
-                    for session in session_mgr.active_sessions():
-                        session_wallet = orchestrator.trading_wallet(
-                            session.config.session_id,
-                            snapshot.market,
-                            session.config.initial_capital_krw,
+                    if settings.session_execution_mode == "multi":
+                        session_principal_total = session_mgr.session_principal_total()
+                        display_reserve_capital = session_mgr.reserve_capital()
+                        for session in session_mgr.active_sessions():
+                            session_wallet = orchestrator.trading_wallet(
+                                session.config.session_id,
+                                snapshot.market,
+                                session.config.initial_capital_krw,
+                            )
+                            session_total = (
+                                session_wallet.krw_available
+                                + session_wallet.asset_available * snapshot.current_price
+                            )
+                            session_mgr.update_session_value(
+                                session.config.session_id,
+                                session_total,
+                            )
+                            session_values[session.config.session_id] = {
+                                "total_value": str(session_total),
+                                "krw_available": str(session_wallet.krw_available),
+                                "asset_available": str(session_wallet.asset_available),
+                                "avg_buy_price": str(session_wallet.avg_buy_price),
+                                "position_value": str(
+                                    session_wallet.asset_available * snapshot.current_price
+                                ),
+                            }
+                        display_wallet = orchestrator.aggregate_session_wallets(
+                            market=snapshot.market,
+                            sessions=session_mgr.active_sessions(),
                         )
-                        session_value = (
-                            session_wallet.krw_available
-                            + session_wallet.asset_available * snapshot.current_price
+                        display_total_value = (
+                            display_wallet.krw_available
+                            + display_wallet.asset_available * snapshot.current_price
+                            + display_reserve_capital
                         )
-                        session_mgr.update_session_value(
-                            session.config.session_id,
-                            session_value,
-                        )
+                    else:
+                        session_principal_total = session_mgr.session_principal_total()
                     session_mgr.save_state()
+
+                store.append("equity_curve", {
+                    "tick": tick_count,
+                    "market": snapshot.market,
+                    "price": str(snapshot.current_price),
+                    "total_value": str(display_total_value),
+                    "krw_available": str(display_wallet.krw_available + display_reserve_capital),
+                    "position_value": str(display_wallet.asset_available * snapshot.current_price),
+                    "session_principal_total": str(session_principal_total),
+                    "reserve_capital": str(display_reserve_capital),
+                    "sessions": session_values,
+                    "execution_mode": settings.session_execution_mode if session_mgr is not None else "global",
+                })
 
                 # Save latest report for `report` command
                 report = orchestrator.generate_report(
                     snapshot,
                     signals,
                     session_decisions=session_decisions,
+                    meta_decision=meta_decision,
                     sessions=session_mgr.active_sessions() if session_mgr is not None else None,
                 )
                 store.write_json("latest_report", {"text": report, "tick": tick_count})
@@ -400,6 +573,7 @@ def run_loop(root: Path, interval: int = 0, max_ticks: int = 0) -> None:
                 bot["tick_count"] = tick_count
                 bot["last_tick"] = snapshot.timestamp
                 bot["status"] = "running"
+                bot["system_mode"] = system_mode
                 if session_mgr:
                     bot["active_sessions"] = len(session_mgr.active_sessions())
                 state.save_bot_state(bot)

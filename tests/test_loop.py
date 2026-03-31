@@ -4,6 +4,7 @@ import tempfile
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 from coin_agent.config.settings import Settings
 from coin_agent.models.agent import Signal
@@ -31,6 +32,7 @@ def _make_settings(root: Path) -> Settings:
         max_daily_loss_krw=Decimal("30000"),
         max_total_loss_krw=Decimal("90000"),
         max_position_pct=Decimal("40"),
+        max_order_krw=Decimal("100000"),
         min_agent_trades=10,
         bench_threshold=30.0,
         min_active_agents=2,
@@ -45,6 +47,7 @@ def _make_settings(root: Path) -> Settings:
         openai_model="gpt-5.4",
         openai_backend="codex_cli",
         session_enabled=False,
+        session_execution_mode="multi",
         session_min_count=3,
         session_max_count=5,
         session_eval_interval=5,
@@ -129,12 +132,100 @@ class _Orchestrator:
             order_id="paper-1",
         )
 
-    def generate_report(self, snapshot, signals):
+    def generate_report(self, snapshot, signals, **kwargs):
         return "report"
+
+
+class _SessionOrchestrator(_Orchestrator):
+    def __init__(self) -> None:
+        super().__init__()
+        self.session_decisions_called = False
+        self.executed_wallet_ids: list[str] = []
+
+    def build_session_decisions(self, snapshot, tech_signals, sessions):
+        self.session_decisions_called = True
+        return [{
+            "session_id": "session_trend_core",
+            "main_agent_id": "sma_agent",
+            "action": "buy",
+            "confidence": 0.34,
+            "buy_vote": Decimal("0.34"),
+            "sell_vote": Decimal("0"),
+            "leader_agent_id": "sma_agent",
+            "reason": "buy (buy_w=0.340, sell_w=0.000)",
+            "intent": OrderIntent(
+                market=snapshot.market,
+                side="bid",
+                volume=Decimal("0.0002"),
+                price=Decimal("100001000"),
+                agent_id="session_trend_core",
+                reason="session_consensus_buy",
+            ),
+            "wallet_value": 100000.0,
+        }]
+
+    def trading_wallet(self, wallet_id, market, initial_capital_krw=None):
+        return WalletSnapshot(
+            krw_available=Decimal("100000"),
+            asset_available=Decimal("0"),
+            avg_buy_price=Decimal("0"),
+        )
+
+    def aggregate_session_wallets(self, market, sessions):
+        return WalletSnapshot(
+            krw_available=Decimal("100000"),
+            asset_available=Decimal("0"),
+            avg_buy_price=Decimal("0"),
+        )
+
+    def execute_order(self, intent, wallet_id=None, initial_capital_krw=None, extra_log=None):
+        self.execute_called = True
+        self.executed_wallet_ids.append(wallet_id or "")
+        return ExecutionResult(
+            mode="paper",
+            success=True,
+            message="filled",
+            order_id="paper-session-1",
+        )
 
 
 class _Leaderboard:
     def save_snapshot(self, metrics):
+        return None
+
+
+class _SessionManager:
+    def __init__(self) -> None:
+        config = SimpleNamespace(
+            session_id="session_trend_core",
+            initial_capital_krw=Decimal("100000"),
+            main_agent_id="sma_agent",
+        )
+        self._session = SimpleNamespace(config=config, is_active=True)
+        self.trade_records = []
+
+    def active_sessions(self):
+        return [self._session]
+
+    def update_session_decision(self, **kwargs):
+        return None
+
+    def update_session_value(self, session_id, current_value_krw):
+        return None
+
+    def get_session(self, session_id):
+        return self._session if session_id == "session_trend_core" else None
+
+    def reserve_capital(self):
+        return Decimal("200000")
+
+    def session_principal_total(self):
+        return Decimal("100000")
+
+    def record_trade(self, session_id, profitable):
+        self.trade_records.append((session_id, profitable))
+
+    def save_state(self):
         return None
 
 
@@ -180,3 +271,50 @@ def test_run_loop_executes_decision_path(monkeypatch):
     assert orchestrator.reconcile_called is True
     assert orchestrator.decide_called is True
     assert orchestrator.execute_called is True
+
+
+def test_run_loop_executes_multi_session_path(monkeypatch):
+    from coin_agent.engine import loop as loop_module
+
+    root = Path(tempfile.mkdtemp())
+    settings = _make_settings(root)
+    settings = Settings(**{**settings.__dict__, "session_enabled": True, "session_execution_mode": "multi"})
+    store = JsonlStore(settings.data_dir)
+    state = StateStore(store)
+    orchestrator = _SessionOrchestrator()
+    perf_tracker = type(
+        "PerfTracker",
+        (),
+        {
+            "get_metrics": lambda self, agent_id: PerformanceMetrics(agent_id=agent_id),
+            "all_metrics": lambda self: {},
+        },
+    )()
+    session_mgr = _SessionManager()
+
+    def fake_build_system(root_path):
+        return (
+            settings,
+            object(),
+            _Collector(),
+            _Registry(),
+            orchestrator,
+            _Broker(),
+            perf_tracker,
+            object(),
+            _Leaderboard(),
+            store,
+            state,
+            session_mgr,
+            None,
+        )
+
+    monkeypatch.setattr(loop_module, "build_system", fake_build_system)
+
+    loop_module.run_loop(root, interval=0, max_ticks=1)
+
+    assert orchestrator.rebalanced is True
+    assert orchestrator.reconcile_called is True
+    assert orchestrator.session_decisions_called is True
+    assert orchestrator.execute_called is True
+    assert orchestrator.executed_wallet_ids == ["session_trend_core"]

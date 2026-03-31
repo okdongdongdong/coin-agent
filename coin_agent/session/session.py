@@ -67,6 +67,9 @@ class SessionState:
     latest_sell_vote: Decimal = Decimal("0")
     latest_leader_agent_id: str = ""
     last_tick: int = 0
+    vote_count: int = 0
+    agreement_count: int = 0
+    executed_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -89,6 +92,9 @@ class SessionState:
             "latest_sell_vote": str(self.latest_sell_vote),
             "latest_leader_agent_id": self.latest_leader_agent_id,
             "last_tick": self.last_tick,
+            "vote_count": self.vote_count,
+            "agreement_count": self.agreement_count,
+            "executed_count": self.executed_count,
         }
 
     @classmethod
@@ -114,4 +120,7 @@ class SessionState:
             latest_sell_vote=Decimal(d.get("latest_sell_vote", "0")),
             latest_leader_agent_id=d.get("latest_leader_agent_id", ""),
             last_tick=d.get("last_tick", 0),
+            vote_count=d.get("vote_count", 0),
+            agreement_count=d.get("agreement_count", 0),
+            executed_count=d.get("executed_count", 0),
         )
