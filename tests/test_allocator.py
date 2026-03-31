@@ -8,6 +8,7 @@ class TestSoftmaxAllocate:
         scores = {"a": 80.0, "b": 60.0, "c": 40.0}
         result = softmax_allocate(scores, Decimal("300000"))
         assert len(result) == 3
+        assert all(isinstance(v, Decimal) for v in result.values())
         total = sum(result.values())
         assert abs(total - Decimal("300000")) < Decimal("10")  # rounding tolerance
 

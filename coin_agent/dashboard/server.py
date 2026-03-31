@@ -56,6 +56,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(self.api.overview())
         elif path == "/api/leaderboard":
             self._send_json(self.api.leaderboard())
+        elif path == "/api/sessions":
+            self._send_json(self.api.sessions())
         elif path == "/api/signals":
             self._send_json(self.api.signals())
         elif path == "/api/orders":

@@ -56,7 +56,7 @@ def softmax_allocate(
     # Step 6: Convert to KRW allocations
     result: Dict[str, Decimal] = {}
     for aid, w in zip(agent_ids, clamped):
-        result[aid] = round(Decimal(str(w)) * total_capital)
+        result[aid] = (Decimal(str(w)) * total_capital).quantize(Decimal("1"))
 
     # Benched agents get 0
     for aid, s in sorted_agents:

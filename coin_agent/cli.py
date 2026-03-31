@@ -21,6 +21,13 @@ LOGGER = logging.getLogger(__name__)
 
 def _build(root: Path):
     from .engine.loop import build_system
+    result = build_system(root)
+    # Return first 11 elements for backward compatibility (ignore session_mgr, evolution)
+    return result[:11]
+
+
+def _build_full(root: Path):
+    from .engine.loop import build_system
     return build_system(root)
 
 
@@ -229,7 +236,10 @@ def cmd_run(args: argparse.Namespace) -> None:
     root = Path(args.root)
     interval = args.interval
     max_ticks = args.max_ticks
-    print(f"Starting bot loop (interval={interval}s, max_ticks={max_ticks or 'unlimited'})...")
+    effective_interval = interval
+    if effective_interval <= 0:
+        effective_interval = Settings.load(root).loop_interval_sec
+    print(f"Starting bot loop (interval={effective_interval}s, max_ticks={max_ticks or 'unlimited'})...")
     print("Press Ctrl+C to stop.\n")
     run_loop(root, interval=interval, max_ticks=max_ticks)
 
@@ -253,6 +263,55 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
     from .dashboard.server import run_dashboard
     root = Path(args.root)
     run_dashboard(root, host=args.host, port=args.port)
+
+
+def cmd_session(args: argparse.Namespace) -> None:
+    root = Path(args.root)
+    result = _build_full(root)
+    settings, store, state = result[0], result[9], result[10]
+    session_mgr, evolution = result[11], result[12]
+
+    if session_mgr is None:
+        print("Session mode is disabled. Set BOT_SESSION_ENABLED=true in .env")
+        return
+
+    sub = args.session_action
+
+    if sub == "init":
+        session_mgr.initialize_sessions()
+        session_mgr.save_state()
+        print(f"Initialized {len(session_mgr.active_sessions())} sessions:")
+        for s in session_mgr.active_sessions():
+            print(
+                f"  {s.config.session_id} (main={s.config.main_agent_id}, "
+                f"capital={s.config.initial_capital_krw:,.0f} KRW)"
+            )
+
+    elif sub == "list":
+        try:
+            session_mgr.load_state()
+        except Exception:
+            pass
+        sessions = session_mgr.active_sessions()
+        if not sessions:
+            print("No active sessions. Run 'session init' first.")
+            return
+        print(f"=== Active Sessions ({len(sessions)}) ===")
+        print(f"{'ID':30s} {'Main':18s} {'Action':8s} {'Return%':>8} {'PnL':>12} {'Trades':>7} {'MDD':>7}")
+        print("-" * 100)
+        for s in session_mgr.rank_sessions():
+            print(
+                f"{s.config.session_id:30s} {s.config.main_agent_id:18s} "
+                f"{s.latest_action.upper():8s} {s.return_pct:>+7.2f}% "
+                f"{s.total_pnl_krw:>+12,.0f} {s.total_trades:>7} "
+                f"{s.max_drawdown_pct:>6.1f}%"
+            )
+
+    elif sub == "evolve":
+        print("Fixed 4-session consensus mode does not use session evolution.")
+
+    elif sub == "history":
+        print("Fixed 4-session consensus mode does not record evolution history.")
 
 
 def cmd_history(args: argparse.Namespace) -> None:
@@ -300,7 +359,7 @@ def main() -> None:
     sub.add_parser("leaderboard", help="Show agent rankings")
 
     p_run = sub.add_parser("run", help="Run auto-loop")
-    p_run.add_argument("--interval", type=int, default=60, help="Tick interval seconds")
+    p_run.add_argument("--interval", type=int, default=0, help="Tick interval seconds (0=use .env)")
     p_run.add_argument("--max-ticks", type=int, default=0, help="Max ticks (0=unlimited)")
 
     sub.add_parser("stop", help="Activate kill switch")
@@ -308,6 +367,10 @@ def main() -> None:
     p_dash = sub.add_parser("dashboard", help="Launch web dashboard")
     p_dash.add_argument("--host", default="0.0.0.0", help="Bind host")
     p_dash.add_argument("--port", type=int, default=8080, help="Bind port")
+
+    p_session = sub.add_parser("session", help="Manage competing sessions")
+    p_session.add_argument("session_action", choices=["init", "list", "evolve", "history"],
+                           help="init=create sessions, list=show active, evolve=force evaluation, history=evolution log")
 
     p_history = sub.add_parser("history", help="Show trade history")
     p_history.add_argument("--last", type=int, default=20, help="Number of recent trades")
@@ -329,6 +392,7 @@ def main() -> None:
         "run": cmd_run,
         "stop": cmd_stop,
         "dashboard": cmd_dashboard,
+        "session": cmd_session,
         "history": cmd_history,
     }
     fn = commands.get(args.command)

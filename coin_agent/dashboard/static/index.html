@@ -286,6 +286,7 @@ tr:hover td { background: rgba(108,92,231,0.05); }
 
   <div class="nav-tabs">
     <button class="nav-tab active" data-tab="overview">Overview</button>
+    <button class="nav-tab" data-tab="sessions">Sessions</button>
     <button class="nav-tab" data-tab="agents">Agents</button>
     <button class="nav-tab" data-tab="signals">Signals</button>
     <button class="nav-tab" data-tab="trades">Trades</button>
@@ -338,6 +339,8 @@ tr:hover td { background: rgba(108,92,231,0.05); }
       </div>
     </div>
 
+    <div class="grid grid-4" style="margin-bottom:16px" id="sessionOverview"></div>
+
     <div class="grid grid-2">
       <div class="card">
         <div class="card-title">Latest Signals</div>
@@ -360,6 +363,34 @@ tr:hover td { background: rgba(108,92,231,0.05); }
     </div>
   </div>
 
+  <!-- SESSIONS TAB -->
+  <div id="tab-sessions" class="tab-content">
+    <div class="card">
+      <div class="card-title">Consensus Sessions</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th>Main Agent</th>
+              <th>Weights</th>
+              <th>Action</th>
+              <th>Confidence</th>
+              <th>Buy Vote</th>
+              <th>Sell Vote</th>
+              <th>Value</th>
+              <th>P&L</th>
+              <th>Trades</th>
+              <th>Leader</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody id="sessionTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- AGENTS TAB -->
   <div id="tab-agents" class="tab-content">
     <div class="card">
@@ -377,6 +408,9 @@ tr:hover td { background: rgba(108,92,231,0.05); }
               <th>Max DD</th>
               <th>Phase</th>
               <th>Allocation</th>
+              <th>Signal</th>
+              <th>Conf</th>
+              <th>Reason</th>
             </tr>
           </thead>
           <tbody id="fullLeaderboard"></tbody>
@@ -496,6 +530,9 @@ function agentColor(aid) {
   if (!AGENT_COLORS[aid]) AGENT_COLORS[aid] = COLORS[colorIdx++ % COLORS.length];
   return AGENT_COLORS[aid];
 }
+function cleanAgentName(aid) {
+  return (aid || '').replace('_agent','').replaceAll('_',' ');
+}
 
 // Tab switching
 document.querySelectorAll('.nav-tab').forEach(tab => {
@@ -527,6 +564,23 @@ function signalClass(a) {
   if (al === 'buy' || al === 'bid') return 'signal-buy';
   if (al === 'sell' || al === 'ask') return 'signal-sell';
   return 'signal-hold';
+}
+
+function latestSignalMap(data) {
+  const map = {};
+  if (!data || !data.length) return map;
+  data.forEach(sig => {
+    if (!sig || !sig.agent_id) return;
+    const prev = map[sig.agent_id];
+    const prevTick = prev && prev.tick !== undefined ? prev.tick : -1;
+    const nextTick = sig.tick !== undefined ? sig.tick : -1;
+    const prevTs = prev && (prev._ts || prev.timestamp || 0);
+    const nextTs = sig._ts || sig.timestamp || 0;
+    if (!prev || nextTick > prevTick || (nextTick === prevTick && nextTs >= prevTs)) {
+      map[sig.agent_id] = sig;
+    }
+  });
+  return map;
 }
 
 async function fetchJSON(url) {
@@ -571,6 +625,34 @@ function renderOverview(data) {
   document.getElementById('krwValue').textContent = fmt(data.krw_available) + ' KRW';
   document.getElementById('posValue').textContent = fmt(data.position_value) + ' KRW';
   document.getElementById('posSub').textContent = (data.total_asset || 0) + ' ' + (data.markets && data.markets[0] ? data.markets[0].split('-')[1] : 'BTC');
+}
+
+function renderSessionOverview(sessions, overview) {
+  const el = document.getElementById('sessionOverview');
+  if (!el) return;
+  if (!sessions || !sessions.length) {
+    el.innerHTML = '<div class="card"><div class="card-title">Sessions</div><div class="neutral">No active sessions</div></div>';
+    return;
+  }
+  const wallets = overview && overview.session_wallets ? overview.session_wallets : {};
+  el.innerHTML = sessions.map(session => {
+    const wallet = wallets[session.session_id] || {};
+    const pnl = session.total_pnl_krw || 0;
+    const action = session.latest_action || 'hold';
+    return `<div class="card">
+      <div class="card-title">${cleanAgentName(session.main_agent_id)} Main</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-weight:700">${session.session_id}</div>
+        <span class="signal-badge ${signalClass(action)}">${action}</span>
+      </div>
+      <div class="card-sub">Weights: ${cleanAgentName(session.main_agent_id)} 40% / peers 20%</div>
+      <div class="card-sub">Buy ${fmtDec(session.latest_buy_vote || 0, 3)} | Sell ${fmtDec(session.latest_sell_vote || 0, 3)}</div>
+      <div class="card-sub">Leader: ${cleanAgentName(session.latest_leader_agent_id || '-')}</div>
+      <div class="card-sub">Value: ${fmt(session.current_value_krw || 0)} KRW</div>
+      <div class="card-sub ${pnlClass(pnl)}">P&L: ${pnl >= 0 ? '+' : ''}${fmt(pnl)} KRW (${fmtDec(session.return_pct || 0, 2)}%)</div>
+      <div class="card-sub">Wallet: ${fmt(wallet.krw_available || 0)} KRW / ${fmtDec(wallet.asset_available || 0, 6)}</div>
+    </div>`;
+  }).join('');
 }
 
 function renderDonut(leaderboard) {
@@ -621,7 +703,7 @@ function renderMiniLeaderboard(data) {
   if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="4" class="neutral">No data</td></tr>'; return; }
   tb.innerHTML = data.slice(0, 4).map((a, i) => {
     const rc = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : 'rank-other';
-    const name = a.agent_id.replace('_agent','').replace('_',' ');
+    const name = cleanAgentName(a.agent_id);
     const pnl = a.pnl || 0;
     return `<tr>
       <td><span class="rank-badge ${rc}">${i+1}</span></td>
@@ -635,10 +717,10 @@ function renderMiniLeaderboard(data) {
 function renderLatestSignals(data) {
   const tb = document.getElementById('latestSignals');
   if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="4" class="neutral">No signals yet</td></tr>'; return; }
-  // Group by most recent tick — take last batch of same timestamp
-  const latest = data.slice(-4);
+  const latestMap = latestSignalMap(data);
+  const latest = Object.values(latestMap).sort((a, b) => (a.agent_id || '').localeCompare(b.agent_id || ''));
   tb.innerHTML = latest.map(s => {
-    const name = (s.agent_id || '').replace('_agent','').replace('_',' ');
+    const name = cleanAgentName(s.agent_id);
     const action = s.action || 'hold';
     return `<tr>
       <td>${name}</td>
@@ -664,17 +746,20 @@ function renderRecentTrades(data) {
   }).join('');
 }
 
-function renderFullLeaderboard(data, wallets) {
+function renderFullLeaderboard(data, wallets, signals) {
   const tb = document.getElementById('fullLeaderboard');
-  if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="9" class="neutral">No agents</td></tr>'; return; }
+  if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="12" class="neutral">No agents</td></tr>'; return; }
+  const signalMap = latestSignalMap(signals);
   tb.innerHTML = data.map((a, i) => {
     const rc = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : 'rank-other';
-    const name = a.agent_id.replace('_agent','').replace('_',' ');
+    const name = cleanAgentName(a.agent_id);
     const pnl = a.pnl || 0;
     const wr = a.win_rate !== undefined ? fmtDec(a.win_rate * 100, 0) + '%' : '0%';
     const mdd = a.max_drawdown !== undefined ? fmtDec(a.max_drawdown, 1) + '%' : '0%';
     const score = a.composite || 50;
     const scoreColor = score >= 70 ? 'var(--green)' : score >= 40 ? 'var(--yellow)' : 'var(--red)';
+    const sig = signalMap[a.agent_id] || {};
+    const action = sig.action || 'hold';
     return `<tr>
       <td><span class="rank-badge ${rc}">${i+1}</span></td>
       <td style="font-weight:600;color:${agentColor(a.agent_id)}">${name}</td>
@@ -690,6 +775,9 @@ function renderFullLeaderboard(data, wallets) {
       <td>${mdd}</td>
       <td><span class="signal-badge signal-hold">${a.phase || 'warmup'}</span></td>
       <td>${fmtDec(a.allocation_pct || 25, 1)}%</td>
+      <td><span class="signal-badge ${signalClass(action)}">${action}</span></td>
+      <td>${fmtDec(sig.confidence || 0, 2)}</td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sig.reason || '-'}</td>
     </tr>`;
   }).join('');
 
@@ -697,7 +785,7 @@ function renderFullLeaderboard(data, wallets) {
   const wt = document.getElementById('agentWallets');
   if (wallets && Object.keys(wallets).length) {
     wt.innerHTML = Object.entries(wallets).map(([k,v]) => {
-      const name = k.replace('_agent','').replace('_',' ');
+      const name = cleanAgentName(k);
       return `<tr>
         <td style="color:${agentColor(k)}">${name}</td>
         <td>${fmt(v.krw_available)}</td>
@@ -716,7 +804,7 @@ function renderScoreBreakdown(data) {
   const dims = ['sharpe_score','win_rate_score','profit_factor_score','drawdown_score','consistency_score'];
   const labels = ['Sharpe (30%)','Win Rate (20%)','Profit Factor (20%)','Drawdown (20%)','Consistency (10%)'];
   el.innerHTML = data.map(a => {
-    const name = a.agent_id.replace('_agent','').replace('_',' ');
+    const name = cleanAgentName(a.agent_id);
     const bars = dims.map((d,i) => {
       const val = a[d] || 50;
       return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0">
@@ -736,7 +824,7 @@ function renderSignalHistory(data) {
   const tb = document.getElementById('signalHistory');
   if (!data || !data.length) { tb.innerHTML = '<tr><td colspan="5" class="neutral">No signals</td></tr>'; return; }
   tb.innerHTML = data.slice().reverse().map(s => {
-    const name = (s.agent_id || '').replace('_agent','').replace('_',' ');
+    const name = cleanAgentName(s.agent_id);
     const action = s.action || 'hold';
     return `<tr>
       <td>${fmtTime(s._ts || s.timestamp)}</td>
@@ -755,12 +843,39 @@ function renderOrderHistory(data) {
     const side = t.side || '?';
     return `<tr>
       <td>${fmtTime(t._ts || t.timestamp)}</td>
-      <td>${(t.agent_id || '-').replace('_agent','')}</td>
+      <td>${cleanAgentName(t.session_id || t.agent_id || '-')}</td>
       <td><span class="signal-badge ${signalClass(side)}">${side}</span></td>
       <td>${t.volume || '-'}</td>
       <td>${fmt(t.price)}</td>
       <td>${t.success ? '<span class="positive">OK</span>' : '<span class="negative">FAIL</span>'}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.reason || t.message || '-'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderSessionTable(data) {
+  const tb = document.getElementById('sessionTable');
+  if (!tb) return;
+  if (!data || !data.length) {
+    tb.innerHTML = '<tr><td colspan="12" class="neutral">No sessions</td></tr>';
+    return;
+  }
+  tb.innerHTML = data.map(session => {
+    const pnl = session.total_pnl_krw || 0;
+    const action = session.latest_action || 'hold';
+    return `<tr>
+      <td>${session.session_id}</td>
+      <td style="color:${agentColor(session.main_agent_id || session.session_id)};font-weight:600">${cleanAgentName(session.main_agent_id)}</td>
+      <td>${cleanAgentName(session.main_agent_id)} 40% / peers 20%</td>
+      <td><span class="signal-badge ${signalClass(action)}">${action}</span></td>
+      <td>${fmtDec(session.latest_confidence || 0, 3)}</td>
+      <td>${fmtDec(session.latest_buy_vote || 0, 3)}</td>
+      <td>${fmtDec(session.latest_sell_vote || 0, 3)}</td>
+      <td>${fmt(session.current_value_krw || 0)}</td>
+      <td class="${pnlClass(pnl)}">${pnl >= 0 ? '+' : ''}${fmt(pnl)} (${fmtDec(session.return_pct || 0, 2)}%)</td>
+      <td>${session.total_trades || 0}</td>
+      <td>${cleanAgentName(session.latest_leader_agent_id || '-')}</td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${session.latest_reason || '-'}</td>
     </tr>`;
   }).join('');
 }
@@ -850,11 +965,13 @@ function renderConfig(data) {
     max_position_pct: 'Max Position %', bench_threshold: 'Bench Threshold',
     min_active_agents: 'Min Active Agents', rebalance_interval: 'Rebalance Interval (ticks)',
     softmax_temperature: 'Softmax Temperature', min_alloc_pct: 'Min Allocation %',
-    max_alloc_pct: 'Max Allocation %',
+    max_alloc_pct: 'Max Allocation %', session_enabled: 'Session Mode',
+    session_min_count: 'Session Count Min', session_max_count: 'Session Count Max',
   };
   tb.innerHTML = Object.entries(data).map(([k,v]) => {
     let display = v;
     if (k === 'dry_run') display = v ? 'Paper Trading' : 'LIVE';
+    else if (k === 'session_enabled') display = v ? 'Enabled' : 'Disabled';
     else if (k === 'markets') display = Array.isArray(v) ? v.join(', ') : v;
     else if (typeof v === 'number' && k.includes('krw')) display = fmt(v) + ' KRW';
     else if (typeof v === 'number' && k.includes('pct')) display = v + '%';
@@ -866,8 +983,9 @@ function renderConfig(data) {
 let cachedOverview = null;
 
 async function refreshAll() {
-  const [overview, leaderboard, signals, orders, risk, config, report] = await Promise.all([
+  const [overview, sessions, leaderboard, signals, orders, risk, config, report] = await Promise.all([
     fetchJSON('/api/overview'),
+    fetchJSON('/api/sessions'),
     fetchJSON('/api/leaderboard'),
     fetchJSON('/api/signals'),
     fetchJSON('/api/orders'),
@@ -879,11 +997,13 @@ async function refreshAll() {
   cachedOverview = overview;
 
   renderOverview(overview);
+  renderSessionOverview(sessions, overview);
+  renderSessionTable(sessions);
   renderMiniLeaderboard(leaderboard);
   renderDonut(leaderboard);
   renderLatestSignals(signals);
   renderRecentTrades(orders);
-  renderFullLeaderboard(leaderboard, overview ? overview.agent_wallets : {});
+  renderFullLeaderboard(leaderboard, overview ? overview.agent_wallets : {}, signals);
   renderScoreBreakdown(leaderboard);
   renderSignalHistory(signals);
   renderOrderHistory(orders);
