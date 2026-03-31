@@ -99,10 +99,16 @@ def _parse_signal(agent_id: str, result: Dict[str, Any], metadata: Dict[str, Any
 class ClaudeAgent(SubAgent):
     """AI agent powered by Claude (Anthropic API)."""
 
-    def __init__(self, agent_id: str = "claude_agent", model: str = "claude-haiku-4-5-20250610",
-                 config: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        agent_id: str = "claude_agent",
+        model: str = "claude-haiku-4-5-20250610",
+        backend: str = "anthropic",
+        config: Optional[Dict[str, Any]] = None,
+    ) -> None:
         super().__init__(agent_id, config)
         self._model = model
+        self._backend = backend
         self._provider: Optional[Any] = None  # lazy init
 
     def strategy_name(self) -> str:
@@ -110,8 +116,8 @@ class ClaudeAgent(SubAgent):
 
     def _get_provider(self) -> Any:
         if self._provider is None:
-            from ...ai.provider import ClaudeProvider
-            self._provider = ClaudeProvider(model=self._model)
+            from ...ai.provider import build_claude_provider
+            self._provider = build_claude_provider(model=self._model, backend=self._backend)
         return self._provider
 
     def analyze(self, snapshot: MarketSnapshot) -> Signal:
@@ -131,8 +137,9 @@ class ClaudeAgent(SubAgent):
             if result is None:
                 return self.hold_signal("claude_no_response")
             metadata: Dict[str, Any] = {
-                "provider": "claude",
+                "provider": provider.name(),
                 "model": self._model,
+                "backend": self._backend,
                 **{k: indicators[k] for k in indicators},
             }
             return _parse_signal(self.agent_id, result, metadata)

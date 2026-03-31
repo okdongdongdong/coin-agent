@@ -14,10 +14,16 @@ LOGGER = logging.getLogger(__name__)
 class CodexAgent(SubAgent):
     """AI agent powered by OpenAI/Codex."""
 
-    def __init__(self, agent_id: str = "codex_agent", model: str = "gpt-4o-mini",
-                 config: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        agent_id: str = "codex_agent",
+        model: str = "gpt-4o-mini",
+        backend: str = "api",
+        config: Optional[Dict[str, Any]] = None,
+    ) -> None:
         super().__init__(agent_id, config)
         self._model = model
+        self._backend = backend
         self._provider: Optional[Any] = None  # lazy init
 
     def strategy_name(self) -> str:
@@ -25,8 +31,8 @@ class CodexAgent(SubAgent):
 
     def _get_provider(self) -> Any:
         if self._provider is None:
-            from ...ai.provider import OpenAIProvider
-            self._provider = OpenAIProvider(model=self._model)
+            from ...ai.provider import build_openai_provider
+            self._provider = build_openai_provider(model=self._model, backend=self._backend)
         return self._provider
 
     def analyze(self, snapshot: MarketSnapshot) -> Signal:
@@ -46,8 +52,9 @@ class CodexAgent(SubAgent):
             if result is None:
                 return self.hold_signal("codex_no_response")
             metadata: Dict[str, Any] = {
-                "provider": "openai",
+                "provider": provider.name(),
                 "model": self._model,
+                "backend": self._backend,
                 **{k: indicators[k] for k in indicators},
             }
             return _parse_signal(self.agent_id, result, metadata)

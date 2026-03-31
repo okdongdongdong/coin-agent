@@ -236,7 +236,10 @@ def cmd_run(args: argparse.Namespace) -> None:
     root = Path(args.root)
     interval = args.interval
     max_ticks = args.max_ticks
-    print(f"Starting bot loop (interval={interval}s, max_ticks={max_ticks or 'unlimited'})...")
+    effective_interval = interval
+    if effective_interval <= 0:
+        effective_interval = Settings.load(root).loop_interval_sec
+    print(f"Starting bot loop (interval={effective_interval}s, max_ticks={max_ticks or 'unlimited'})...")
     print("Press Ctrl+C to stop.\n")
     run_loop(root, interval=interval, max_ticks=max_ticks)
 
@@ -279,8 +282,10 @@ def cmd_session(args: argparse.Namespace) -> None:
         session_mgr.save_state()
         print(f"Initialized {len(session_mgr.active_sessions())} sessions:")
         for s in session_mgr.active_sessions():
-            print(f"  {s.config.session_id} ({s.config.provider_type}) "
-                  f"capital={s.config.initial_capital_krw:,.0f} KRW")
+            print(
+                f"  {s.config.session_id} (main={s.config.main_agent_id}, "
+                f"capital={s.config.initial_capital_krw:,.0f} KRW)"
+            )
 
     elif sub == "list":
         try:
@@ -292,37 +297,21 @@ def cmd_session(args: argparse.Namespace) -> None:
             print("No active sessions. Run 'session init' first.")
             return
         print(f"=== Active Sessions ({len(sessions)}) ===")
-        print(f"{'ID':30s} {'Provider':10s} {'Return%':>8} {'PnL':>12} {'Trades':>7} {'MDD':>7}")
-        print("-" * 80)
+        print(f"{'ID':30s} {'Main':18s} {'Action':8s} {'Return%':>8} {'PnL':>12} {'Trades':>7} {'MDD':>7}")
+        print("-" * 100)
         for s in session_mgr.rank_sessions():
-            print(f"{s.config.session_id:30s} {s.config.provider_type:10s} "
-                  f"{s.return_pct:>+7.2f}% {s.total_pnl_krw:>+12,.0f} "
-                  f"{s.total_trades:>7} {s.max_drawdown_pct:>6.1f}%")
+            print(
+                f"{s.config.session_id:30s} {s.config.main_agent_id:18s} "
+                f"{s.latest_action.upper():8s} {s.return_pct:>+7.2f}% "
+                f"{s.total_pnl_krw:>+12,.0f} {s.total_trades:>7} "
+                f"{s.max_drawdown_pct:>6.1f}%"
+            )
 
     elif sub == "evolve":
-        try:
-            session_mgr.load_state()
-        except Exception:
-            pass
-        event = evolution.evaluate()
-        if event:
-            print(f"Evolution event:")
-            print(f"  Eliminated: {event['eliminated']} ({event['reason']})")
-            print(f"  New session: {event['new_session']}")
-            session_mgr.save_state()
-        else:
-            print("No evolution needed at this time.")
+        print("Fixed 4-session consensus mode does not use session evolution.")
 
     elif sub == "history":
-        history = evolution.get_evolution_history()
-        if not history:
-            print("No evolution history yet.")
-            return
-        print(f"=== Evolution History ({len(history)} events) ===")
-        for i, evt in enumerate(history, 1):
-            print(f"  [{i}] eliminated={evt.get('eliminated', '?')} "
-                  f"reason={evt.get('reason', '?')} "
-                  f"new={evt.get('new_session', '?')}")
+        print("Fixed 4-session consensus mode does not record evolution history.")
 
 
 def cmd_history(args: argparse.Namespace) -> None:
@@ -370,7 +359,7 @@ def main() -> None:
     sub.add_parser("leaderboard", help="Show agent rankings")
 
     p_run = sub.add_parser("run", help="Run auto-loop")
-    p_run.add_argument("--interval", type=int, default=60, help="Tick interval seconds")
+    p_run.add_argument("--interval", type=int, default=0, help="Tick interval seconds (0=use .env)")
     p_run.add_argument("--max-ticks", type=int, default=0, help="Max ticks (0=unlimited)")
 
     sub.add_parser("stop", help="Activate kill switch")

@@ -22,7 +22,9 @@ def _make_env() -> tuple:
         rebalance_interval=50, softmax_temperature=2.0,
         min_alloc_pct=Decimal("5"), max_alloc_pct=Decimal("40"),
         anthropic_api_key="", openai_api_key="",
+        claude_backend="anthropic",
         claude_model="claude-haiku-4-5-20250610", openai_model="gpt-4o-mini",
+        openai_backend="api",
         session_enabled=False, session_min_count=3, session_max_count=5,
         session_eval_interval=5, session_min_ticks_before_eval=10,
     )

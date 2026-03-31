@@ -17,10 +17,14 @@ class HybridAgent(SubAgent):
     def __init__(self, agent_id: str = "hybrid_agent",
                  claude_model: str = "claude-haiku-4-5-20250610",
                  codex_model: str = "gpt-4o-mini",
+                 claude_backend: str = "anthropic",
+                 codex_backend: str = "api",
                  config: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(agent_id, config)
         self._claude_model = claude_model
         self._codex_model = codex_model
+        self._claude_backend = claude_backend
+        self._codex_backend = codex_backend
         self._provider: Optional[Any] = None  # lazy init
 
     def strategy_name(self) -> str:
@@ -28,11 +32,17 @@ class HybridAgent(SubAgent):
 
     def _get_provider(self) -> Any:
         if self._provider is None:
-            from ...ai.provider import ClaudeProvider, OpenAIProvider
+            from ...ai.provider import build_claude_provider, build_openai_provider
             from ...ai.fallback import FallbackProvider
             self._provider = FallbackProvider(
-                primary=ClaudeProvider(model=self._claude_model),
-                secondary=OpenAIProvider(model=self._codex_model),
+                primary=build_claude_provider(
+                    model=self._claude_model,
+                    backend=self._claude_backend,
+                ),
+                secondary=build_openai_provider(
+                    model=self._codex_model,
+                    backend=self._codex_backend,
+                ),
             )
         return self._provider
 
@@ -64,6 +74,8 @@ class HybridAgent(SubAgent):
                 "provider": active,
                 "claude_model": self._claude_model,
                 "codex_model": self._codex_model,
+                "claude_backend": self._claude_backend,
+                "codex_backend": self._codex_backend,
                 **{k: indicators[k] for k in indicators},
             }
             return _parse_signal(self.agent_id, result, metadata)

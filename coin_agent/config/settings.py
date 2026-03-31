@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -40,6 +41,14 @@ def _get_decimal(env: Dict[str, str], key: str, default: str) -> Decimal:
     return Decimal(_get(env, key, default))
 
 
+def _get_backend(env: Dict[str, str], key: str, default: str, allowed: set[str]) -> str:
+    value = _get(env, key, default).strip().lower().replace("-", "_")
+    if value not in allowed:
+        allowed_list = ", ".join(sorted(allowed))
+        raise ValueError(f"Unsupported backend for {key}: {value} (allowed: {allowed_list})")
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     access_key: str
@@ -69,8 +78,10 @@ class Settings:
     # AI Provider Config
     anthropic_api_key: str
     openai_api_key: str
+    claude_backend: str
     claude_model: str
     openai_model: str
+    openai_backend: str
 
     # Session Config
     session_enabled: bool
@@ -112,8 +123,20 @@ class Settings:
             # AI Provider Config
             anthropic_api_key=_get(env, "ANTHROPIC_API_KEY", ""),
             openai_api_key=_get(env, "OPENAI_API_KEY", ""),
+            claude_backend=_get_backend(
+                env,
+                "BOT_CLAUDE_BACKEND",
+                "anthropic",
+                {"anthropic", "codex_cli"},
+            ),
             claude_model=_get(env, "BOT_CLAUDE_MODEL", "claude-haiku-4-5-20250610"),
             openai_model=_get(env, "BOT_OPENAI_MODEL", "gpt-4o-mini"),
+            openai_backend=_get_backend(
+                env,
+                "BOT_OPENAI_BACKEND",
+                "api",
+                {"api", "codex_cli"},
+            ),
             # Session Config
             session_enabled=_get_bool(env, "BOT_SESSION_ENABLED", False),
             session_min_count=_get_int(env, "BOT_SESSION_MIN_COUNT", 3),
@@ -131,8 +154,26 @@ class Settings:
         return bool(self.anthropic_api_key)
 
     @property
+    def has_claude_provider(self) -> bool:
+        if self.claude_backend == "codex_cli":
+            return bool(shutil.which(os.environ.get("BOT_CODEX_CLI_PATH", "codex")))
+        return self.has_anthropic_key
+
+    @property
     def has_openai_key(self) -> bool:
         return bool(self.openai_api_key)
+
+    @property
+    def has_codex_cli(self) -> bool:
+        if self.openai_backend != "codex_cli":
+            return False
+        return bool(shutil.which(os.environ.get("BOT_CODEX_CLI_PATH", "codex")))
+
+    @property
+    def has_openai_provider(self) -> bool:
+        if self.openai_backend == "codex_cli":
+            return self.has_codex_cli
+        return self.has_openai_key
 
     @property
     def primary_market(self) -> str:

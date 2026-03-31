@@ -18,7 +18,7 @@ class PaperBroker:
         self.settings = settings
         self.state = state
 
-    def get_wallet(self, agent_id: str = "global") -> WalletSnapshot:
+    def get_wallet(self, agent_id: str = "global", asset_currency: str = "") -> WalletSnapshot:
         default = {
             "krw_available": str(self.settings.paper_krw_balance),
             "asset_available": "0",
@@ -82,7 +82,9 @@ class LiveBroker:
     def __init__(self, client: BithumbClient) -> None:
         self.client = client
 
-    def get_wallet(self, asset_currency: str) -> WalletSnapshot:
+    def get_wallet(self, agent_id: str = "global", asset_currency: str = "") -> WalletSnapshot:
+        if not asset_currency:
+            raise ValueError("asset_currency is required for live wallet queries")
         accounts = self.client.get_accounts()
         acct_map: Dict[str, dict] = {item["currency"]: item for item in accounts}
         krw = acct_map.get("KRW", {})
@@ -93,7 +95,7 @@ class LiveBroker:
             avg_buy_price=Decimal(asset.get("avg_buy_price", "0")),
         )
 
-    def execute(self, intent: OrderIntent) -> ExecutionResult:
+    def execute(self, intent: OrderIntent, agent_id: str = "global") -> ExecutionResult:
         resp = self.client.place_limit_order(
             market=intent.market,
             side=intent.side,
@@ -117,3 +119,9 @@ class LiveBroker:
             order_payload=payload,
             raw_response=resp,
         )
+
+    def get_order(self, order_id: str) -> dict:
+        return self.client.get_order(order_id)
+
+    def cancel_order(self, order_id: str) -> dict:
+        return self.client.cancel_order(order_id)

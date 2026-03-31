@@ -9,12 +9,14 @@ from typing import Any, Dict, List, Optional
 class SessionConfig:
     """Configuration for a trading session."""
 
-    session_id: str                  # unique ID like "session_001"
-    provider_type: str               # "claude", "codex", "hybrid", "technical"
-    agent_ids: List[str]             # which agents are in this session
+    session_id: str                  # unique ID like "session_sma_main"
+    provider_type: str               # retained for backward compatibility
+    agent_ids: List[str]             # all technical agents participating
     initial_capital_krw: Decimal     # starting capital
     created_at: str                  # ISO timestamp
-    hyperparams: Dict[str, Any] = field(default_factory=dict)  # softmax temp, thresholds, etc.
+    main_agent_id: str = ""          # the 40% voting agent in this session
+    vote_weights: Dict[str, Any] = field(default_factory=dict)
+    hyperparams: Dict[str, Any] = field(default_factory=dict)  # thresholds, etc.
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -23,6 +25,8 @@ class SessionConfig:
             "agent_ids": self.agent_ids,
             "initial_capital_krw": str(self.initial_capital_krw),
             "created_at": self.created_at,
+            "main_agent_id": self.main_agent_id,
+            "vote_weights": self.vote_weights,
             "hyperparams": self.hyperparams,
         }
 
@@ -30,10 +34,12 @@ class SessionConfig:
     def from_dict(cls, d: Dict[str, Any]) -> "SessionConfig":
         return cls(
             session_id=d["session_id"],
-            provider_type=d["provider_type"],
+            provider_type=d.get("provider_type", "technical_consensus"),
             agent_ids=d.get("agent_ids", []),
             initial_capital_krw=Decimal(d.get("initial_capital_krw", "0")),
             created_at=d.get("created_at", ""),
+            main_agent_id=d.get("main_agent_id", ""),
+            vote_weights=d.get("vote_weights", {}),
             hyperparams=d.get("hyperparams", {}),
         )
 
@@ -54,6 +60,13 @@ class SessionState:
     generation: int = 1                      # increments when session is replaced
     eliminated_at: Optional[str] = None      # ISO timestamp if eliminated
     elimination_reason: Optional[str] = None
+    latest_action: str = "hold"
+    latest_confidence: float = 0.0
+    latest_reason: str = ""
+    latest_buy_vote: Decimal = Decimal("0")
+    latest_sell_vote: Decimal = Decimal("0")
+    latest_leader_agent_id: str = ""
+    last_tick: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -69,6 +82,13 @@ class SessionState:
             "generation": self.generation,
             "eliminated_at": self.eliminated_at,
             "elimination_reason": self.elimination_reason,
+            "latest_action": self.latest_action,
+            "latest_confidence": self.latest_confidence,
+            "latest_reason": self.latest_reason,
+            "latest_buy_vote": str(self.latest_buy_vote),
+            "latest_sell_vote": str(self.latest_sell_vote),
+            "latest_leader_agent_id": self.latest_leader_agent_id,
+            "last_tick": self.last_tick,
         }
 
     @classmethod
@@ -87,4 +107,11 @@ class SessionState:
             generation=d.get("generation", 1),
             eliminated_at=d.get("eliminated_at"),
             elimination_reason=d.get("elimination_reason"),
+            latest_action=d.get("latest_action", "hold"),
+            latest_confidence=float(d.get("latest_confidence", 0.0)),
+            latest_reason=d.get("latest_reason", ""),
+            latest_buy_vote=Decimal(d.get("latest_buy_vote", "0")),
+            latest_sell_vote=Decimal(d.get("latest_sell_vote", "0")),
+            latest_leader_agent_id=d.get("latest_leader_agent_id", ""),
+            last_tick=d.get("last_tick", 0),
         )
